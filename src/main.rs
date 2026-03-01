@@ -1459,13 +1459,13 @@ impl App {
 
         let output_te = text_editor(&self.output_content)
             .on_action(Msg::OutputAction)
-            .height(Length::Fill);
+            .height(Length::Shrink);
         let output_line_count = self.output_content.text().lines().count().max(1);
         let output_gutter = make_gutter(output_line_count);
         let output_hl = make_highlight_layer(self.output_highlight_line);
         let output_stack: Element<'_, Msg> = stack![output_hl, output_te].into();
         let output = mouse_area(
-            row![output_gutter, output_stack].height(Length::Fill),
+            scrollable(row![output_gutter, output_stack]).height(Length::Fill),
         )
         .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Output));
 
@@ -1759,10 +1759,10 @@ impl App {
                 let highlight = make_highlight_layer(self.editor_highlight_line);
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
-                    .height(Length::Fill);
+                    .height(Length::Shrink);
                 let editor_stack: Element<'_, Msg> = stack![highlight, te].into();
                 mouse_area(
-                    row![gutter, editor_stack].height(Length::Fill),
+                    scrollable(row![gutter, editor_stack]).height(Length::Fill),
                 )
                 .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Editor))
                 .into()
