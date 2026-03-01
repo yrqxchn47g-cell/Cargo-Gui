@@ -81,6 +81,12 @@ const GUTTER_WIDTH: f32 = 48.0;
 /// Virtual line height (px) used for the find-match highlight overlay.
 const LINE_HEIGHT: f32 = 20.0;
 
+/// Background colour for non-current find-match highlight bands (subtle yellow).
+const FIND_OTHER_COLOR: Color = Color { r: 1.0, g: 0.88, b: 0.0, a: 0.13 };
+
+/// Background colour for the current find-match highlight band (strong orange-yellow).
+const FIND_CURRENT_COLOR: Color = Color { r: 1.0, g: 0.65, b: 0.0, a: 0.40 };
+
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
     ("Build", "build"),
@@ -251,6 +257,8 @@ struct App {
     // --- Find/Replace panel state ---
     /// Whether the find/replace panel is visible in the editor view.
     find_replace_open: bool,
+    /// When the find panel is open, whether the replace row is also visible.
+    find_show_replace: bool,
     /// Current search string.
     find_text: String,
     /// Current replacement string.
@@ -259,6 +267,8 @@ struct App {
     find_status: String,
     /// 0-based index of the match that will be acted on by "Nächstes" / "Ersetzen".
     find_current_match: usize,
+    /// Line numbers (0-based) of every match in the current tab for multi-highlight.
+    find_all_match_lines: Vec<usize>,
 
     // --- Context menu state ---
     /// Non-None when a context menu is currently visible.
@@ -317,10 +327,12 @@ impl App {
                 active_tab: 0,
                 untitled_counter: 1,
                 find_replace_open: false,
+                find_show_replace: false,
                 find_text: String::new(),
                 replace_text: String::new(),
                 find_status: String::new(),
                 find_current_match: 0,
+                find_all_match_lines: Vec::new(),
                 context_menu: None,
                 editor_highlight_line: None,
                 output_find_open: false,
@@ -403,6 +415,14 @@ enum Msg {
     // --- Find / Replace ---
     /// Toggle the find/replace panel open or closed.
     ToggleFindReplace,
+    /// Open the find panel (search only, no replace row) — triggered by Ctrl+F.
+    OpenInlineFind,
+    /// Open the find panel with the replace row visible — triggered by Ctrl+H.
+    OpenInlineReplace,
+    /// Close the find panel — triggered by Esc.
+    CloseInlineFind,
+    /// Toggle the replace row inside the open find panel.
+    ToggleReplaceField,
     /// Search text field changed.
     FindTextChanged(String),
     /// Replace text field changed.
@@ -644,6 +664,9 @@ impl App {
                 if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
                     if matches!(action, text_editor::Action::Edit(_)) {
                         tab.dirty = true;
+                        // Text has changed — existing match highlights are stale.
+                        self.editor_highlight_line = None;
+                        self.find_all_match_lines.clear();
                     }
                     tab.content.perform(action);
                 }
@@ -663,6 +686,18 @@ impl App {
                     self.active_tab = idx;
                     self.editor_highlight_line = None;
                     self.find_current_match = 0;
+                    // Recompute all-match highlights for the newly active tab.
+                    if self.find_replace_open && !self.find_text.is_empty() {
+                        if let Some(tab) = self.editor_tabs.get(idx) {
+                            let text = tab.content.text();
+                            self.find_all_match_lines =
+                                collect_all_match_lines(&text, &self.find_text);
+                        } else {
+                            self.find_all_match_lines.clear();
+                        }
+                    } else {
+                        self.find_all_match_lines.clear();
+                    }
                 }
                 Task::none()
             }
@@ -717,17 +752,57 @@ impl App {
                 if !self.find_replace_open {
                     self.find_status.clear();
                     self.editor_highlight_line = None;
+                    self.find_all_match_lines.clear();
+                } else {
+                    self.find_show_replace = false;
                 }
+                Task::none()
+            }
+
+            Msg::OpenInlineFind => {
+                if self.current_view != View::Editor {
+                    return Task::none();
+                }
+                self.find_replace_open = true;
+                self.find_show_replace = false;
+                Task::none()
+            }
+
+            Msg::OpenInlineReplace => {
+                if self.current_view != View::Editor {
+                    return Task::none();
+                }
+                self.find_replace_open = true;
+                self.find_show_replace = true;
+                Task::none()
+            }
+
+            Msg::CloseInlineFind => {
+                if self.find_replace_open {
+                    self.find_replace_open = false;
+                    self.find_status.clear();
+                    self.editor_highlight_line = None;
+                    self.find_all_match_lines.clear();
+                }
+                Task::none()
+            }
+
+            Msg::ToggleReplaceField => {
+                self.find_show_replace = !self.find_show_replace;
                 Task::none()
             }
 
             Msg::FindTextChanged(s) => {
                 self.find_text = s;
                 self.find_current_match = 0;
-                let total = count_matches(
-                    self.editor_tabs.get(self.active_tab),
-                    &self.find_text,
-                );
+                if let Some(tab) = self.editor_tabs.get(self.active_tab) {
+                    let text = tab.content.text();
+                    self.find_all_match_lines =
+                        collect_all_match_lines(&text, &self.find_text);
+                } else {
+                    self.find_all_match_lines.clear();
+                }
+                let total = self.find_all_match_lines.len();
                 if total == 0 {
                     self.find_status = count_matches_status(
                         self.editor_tabs.get(self.active_tab),
@@ -754,10 +829,7 @@ impl App {
                 if self.find_text.is_empty() {
                     return Task::none();
                 }
-                let total = count_matches(
-                    self.editor_tabs.get(self.active_tab),
-                    &self.find_text,
-                );
+                let total = self.find_all_match_lines.len();
                 if total == 0 {
                     self.find_status = "Nicht gefunden".to_string();
                     self.editor_highlight_line = None;
@@ -787,10 +859,7 @@ impl App {
                 if self.find_text.is_empty() {
                     return Task::none();
                 }
-                let total = count_matches(
-                    self.editor_tabs.get(self.active_tab),
-                    &self.find_text,
-                );
+                let total = self.find_all_match_lines.len();
                 if total == 0 {
                     self.find_status = "Nicht gefunden".to_string();
                     self.editor_highlight_line = None;
@@ -825,7 +894,7 @@ impl App {
                     let full = tab.content.text();
                     let needle = &self.find_text;
                     let replacement = &self.replace_text;
-                    // Collect all match byte-positions.
+                    // Collect all match byte-positions (Unicode-safe: use char boundaries).
                     let positions: Vec<usize> = full
                         .match_indices(needle.as_str())
                         .map(|(i, _)| i)
@@ -839,14 +908,17 @@ impl App {
                         new_text.replace_range(pos..pos + needle.len(), replacement);
                         tab.content = text_editor::Content::with_text(&new_text);
                         tab.dirty = true;
-                        // Advance to next match (count may have changed).
-                        let new_total = count_matches(Some(tab), needle);
+                        // Recompute all-match highlights after the text changed.
+                        let new_text_ref = tab.content.text();
+                        self.find_all_match_lines =
+                            collect_all_match_lines(&new_text_ref, needle);
+                        let new_total = self.find_all_match_lines.len();
                         if new_total == 0 {
                             self.find_current_match = 0;
+                            self.editor_highlight_line = None;
                             self.find_status = "Nicht gefunden".to_string();
                         } else {
-                            self.find_current_match =
-                                self.find_current_match % new_total;
+                            self.find_current_match %= new_total;
                             self.find_status =
                                 format!("{}/{}", self.find_current_match + 1, new_total);
                         }
@@ -869,6 +941,8 @@ impl App {
                         tab.content = text_editor::Content::with_text(&new_text);
                         tab.dirty = true;
                         self.find_current_match = 0;
+                        self.editor_highlight_line = None;
+                        self.find_all_match_lines.clear();
                         self.find_status = format!("{count} ersetzt");
                     }
                 }
@@ -1636,7 +1710,7 @@ impl App {
             button(find_replace_toggle_label)
                 .on_press(Msg::ToggleFindReplace)
                 .padding([5, 10]),
-            "Suchen & Ersetzen-Panel ein-/ausblenden".to_string(),
+            "Suchen & Ersetzen-Panel ein-/ausblenden (Ctrl+F)".to_string(),
         );
 
         // -- Tab bar --
@@ -1687,64 +1761,85 @@ impl App {
                     .on_input(Msg::FindTextChanged)
                     .on_submit(Msg::FindNext)
                     .padding([4, 6])
-                    .width(180),
-                "Suchtext eingeben".to_string(),
-            );
-            let replace_input = hover_tip(
-                text_input("Ersetzen durch…", &self.replace_text)
-                    .on_input(Msg::ReplaceTextChanged)
-                    .on_submit(Msg::ReplaceOne)
-                    .padding([4, 6])
-                    .width(180),
-                "Ersetzungstext eingeben".to_string(),
+                    .width(200),
+                "Suchtext eingeben (Enter = Nächstes, Shift+Enter = Vorheriges)".to_string(),
             );
             let next_btn = hover_tip(
-                button("▼ Nächstes").on_press(Msg::FindNext).padding([4, 8]),
-                "Nächstes Vorkommen suchen".to_string(),
+                button("▼").on_press(Msg::FindNext).padding([4, 8]),
+                "Nächstes Vorkommen (Enter)".to_string(),
             );
             let prev_btn = hover_tip(
-                button("▲ Vorheriges").on_press(Msg::FindPrev).padding([4, 8]),
-                "Vorheriges Vorkommen suchen".to_string(),
+                button("▲").on_press(Msg::FindPrev).padding([4, 8]),
+                "Vorheriges Vorkommen (Shift+Enter)".to_string(),
             );
-            let replace_btn = hover_tip(
-                button("Ersetzen").on_press(Msg::ReplaceOne).padding([4, 8]),
-                "Aktuelles Vorkommen ersetzen".to_string(),
-            );
-            let replace_all_btn = hover_tip(
-                button("Alle ersetzen")
-                    .on_press(Msg::ReplaceAll)
+            let toggle_replace_label = if self.find_show_replace { "▲ Ersetzen" } else { "▼ Ersetzen" };
+            let toggle_replace_btn = hover_tip(
+                button(toggle_replace_label)
+                    .on_press(Msg::ToggleReplaceField)
                     .padding([4, 8]),
-                "Alle Vorkommen ersetzen".to_string(),
+                "Ersetzen-Feld ein-/ausblenden (Ctrl+H)".to_string(),
             );
             let close_btn = hover_tip(
                 button("✕")
-                    .on_press(Msg::ToggleFindReplace)
+                    .on_press(Msg::CloseInlineFind)
                     .padding([4, 6])
                     .style(button::danger),
-                "Suchen/Ersetzen-Panel schließen".to_string(),
+                "Suchen-Leiste schließen (Esc)".to_string(),
             );
             let status_text = text(self.find_status.as_str()).size(12);
 
-            let panel = container(
-                row![
-                    text("Suchen:").size(12),
-                    find_input,
-                    text("Ersetzen:").size(12),
+            // First row: search field + navigation + status + close.
+            let find_row = row![
+                text("🔍").size(12),
+                find_input,
+                prev_btn,
+                next_btn,
+                toggle_replace_btn,
+                status_text,
+                horizontal_space(),
+                close_btn,
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center)
+            .padding([4, 8]);
+
+            let mut panel_col = column![find_row].spacing(2);
+
+            // Second row: replace field + action buttons (only when visible).
+            if self.find_show_replace {
+                let replace_input = hover_tip(
+                    text_input("Ersetzen durch…", &self.replace_text)
+                        .on_input(Msg::ReplaceTextChanged)
+                        .on_submit(Msg::ReplaceOne)
+                        .padding([4, 6])
+                        .width(200),
+                    "Ersetzungstext eingeben (Enter = Ersetzen)".to_string(),
+                );
+                let replace_btn = hover_tip(
+                    button("Ersetzen").on_press(Msg::ReplaceOne).padding([4, 8]),
+                    "Aktuelles Vorkommen ersetzen".to_string(),
+                );
+                let replace_all_btn = hover_tip(
+                    button("Alle ersetzen")
+                        .on_press(Msg::ReplaceAll)
+                        .padding([4, 8]),
+                    "Alle Vorkommen ersetzen".to_string(),
+                );
+                let replace_row = row![
+                    text("↺").size(12),
                     replace_input,
-                    prev_btn,
-                    next_btn,
                     replace_btn,
                     replace_all_btn,
-                    status_text,
-                    horizontal_space(),
-                    close_btn,
                 ]
                 .spacing(6)
                 .align_y(iced::Alignment::Center)
-                .padding([4, 8]),
-            )
-            .style(container::bordered_box)
-            .width(Length::Fill);
+                .padding([2, 8]);
+                panel_col = panel_col.push(replace_row);
+            }
+
+            let panel = container(panel_col)
+                .style(container::bordered_box)
+                .width(Length::Fill);
 
             Some(panel.into())
         } else {
@@ -1756,7 +1851,10 @@ impl App {
             if let Some(tab) = self.editor_tabs.get(self.active_tab) {
                 let line_count = tab.content.text().lines().count().max(1);
                 let gutter = make_gutter(line_count);
-                let highlight = make_highlight_layer(self.editor_highlight_line);
+                let highlight = make_multi_highlight_layer(
+                    &self.find_all_match_lines,
+                    self.find_current_match,
+                );
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
                     .height(Length::Shrink);
@@ -1828,10 +1926,40 @@ impl App {
         let flush = iced::time::every(Duration::from_millis(100)).map(|_| Msg::FlushOutput);
 
         // Track the global mouse position so the tooltip overlay can follow
-        // the cursor.
+        // the cursor, and handle keyboard shortcuts for the inline find bar.
         let mouse = iced::event::listen_with(|event, _status, _id| match event {
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
                 Some(Msg::MouseMoved(position))
+            }
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key,
+                modifiers,
+                ..
+            }) => {
+                use iced::keyboard::key::Named;
+                use iced::keyboard::Key;
+                let ctrl = modifiers.control();
+                let shift = modifiers.shift();
+                // Ctrl+F → open find panel (search only).
+                if ctrl && !shift {
+                    if let Key::Character(c) = &key {
+                        match c.as_ref() {
+                            "f" => return Some(Msg::OpenInlineFind),
+                            "h" => return Some(Msg::OpenInlineReplace),
+                            _ => {}
+                        }
+                    }
+                }
+                // Esc → close the find panel if open.
+                if key == Key::Named(Named::Escape) {
+                    return Some(Msg::CloseInlineFind);
+                }
+                // Shift+Enter → previous match (unmodified Enter is handled by
+                // the text_input's on_submit).
+                if shift && !ctrl && key == Key::Named(Named::Enter) {
+                    return Some(Msg::FindPrev);
+                }
+                None
             }
             _ => None,
         });
@@ -2032,6 +2160,61 @@ fn make_highlight_layer<'a>(line_index: Option<usize>) -> Element<'a, Msg> {
     }
 }
 
+/// Collect the 0-based line numbers of every non-overlapping occurrence of
+/// `needle` in `text`.  Returns an empty `Vec` when `needle` is empty.
+///
+/// Uses [`byte_offset_to_position`] so the result is correct for any Unicode
+/// input.
+fn collect_all_match_lines(text: &str, needle: &str) -> Vec<usize> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    text.match_indices(needle)
+        .map(|(byte_off, _)| byte_offset_to_position(text, byte_off).0)
+        .collect()
+}
+
+/// Build a virtual highlight-overlay element that renders **all** match lines
+/// with a subtle yellow band and the **current** match with a stronger
+/// orange-yellow band on top.
+///
+/// Uses a [`stack`] so that each band is independently positioned from the top
+/// of the editor area.  When `all_lines` is empty the overlay is transparent.
+///
+/// If `current_match >= all_lines.len()` no line receives the stronger
+/// highlight; this is safe (no panic) and indicates there is no active match.
+fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize) -> Element<'a, Msg> {
+    if all_lines.is_empty() {
+        return Space::new(Length::Fill, Length::Fill).into();
+    }
+
+    let mut layers: Vec<Element<'a, Msg>> = Vec::with_capacity(all_lines.len() + 1);
+    // Base transparent fill so the stack occupies the full editor area.
+    layers.push(Space::new(Length::Fill, Length::Fill).into());
+
+    for (i, &line) in all_lines.iter().enumerate() {
+        let color = if i == current_match { FIND_CURRENT_COLOR } else { FIND_OTHER_COLOR };
+        let offset = line as f32 * LINE_HEIGHT;
+        let band: Element<'a, Msg> = column![
+            Space::with_height(Length::Fixed(offset)),
+            container(Space::new(Length::Fill, Length::Fixed(LINE_HEIGHT)))
+                .style(move |_theme| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(color)),
+                    border: iced::Border::default(),
+                    text_color: None,
+                    shadow: iced::Shadow::default(),
+                })
+                .width(Length::Fill),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
+        layers.push(band);
+    }
+
+    stack(layers).into()
+}
+
 /// Spawn a cargo process and return a [`Task`] that streams its output as
 /// [`Msg::Append`] messages, followed by a single [`Msg::Done`].
 ///
@@ -2203,18 +2386,22 @@ Unter \"✏ Editor\" steht ein Texteditor mit Tabs zur Verfügung.
   - \"📂 Öffnen\"  — Datei laden (öffnet nativen Dateiauswahl-Dialog)
   - \"✕\"          — Tab schließen
   - \"*\"          im Tabtitel zeigt ungespeicherte Änderungen an.
-  - \"🔍 Suchen\"  — Suchen & Ersetzen-Panel ein-/ausblenden.
+  - \"🔍 Suchen\"  — Inline-Suchleiste ein-/ausblenden (auch per Ctrl+F / Ctrl+H).
   - Rechtsklick im Editor öffnet ein Kontextmenü mit Kopieren, Ausschneiden,
     Einfügen, Alles auswählen und Suchen/Ersetzen.
 
 ## Suchen & Ersetzen (Editor)
-Das Panel öffnet sich unterhalb der Tab-Leiste:
-  - Suchfeld: Suchtext eingeben (Enter = Nächstes).
-  - Ersetzen-Feld: Ersetzungstext eingeben.
-  - \"▼ Nächstes\" / \"▲ Vorheriges\" — Durch Treffer navigieren.
-  - \"Ersetzen\" — Aktuelles Vorkommen ersetzen.
-  - \"Alle ersetzen\" — Alle Vorkommen auf einmal ersetzen.
+Die Inline-Suchleiste öffnet sich unterhalb der Tab-Leiste:
+  - Ctrl+F           — Suchleiste öffnen (nur Suchen).
+  - Ctrl+H           — Suchleiste öffnen mit Ersetzen-Feld.
+  - Esc              — Suchleiste schließen.
+  - Suchfeld: Suchtext eingeben (Enter = Nächstes, Shift+Enter = Vorheriges).
+  - \"▼\" / \"▲\"        — Durch Treffer navigieren.
+  - \"▼ Ersetzen\"     — Ersetzen-Feld ein-/ausblenden.
+  - \"Ersetzen\"       — Aktuelles Vorkommen ersetzen.
+  - \"Alle ersetzen\"  — Alle Vorkommen auf einmal ersetzen.
   - Statusanzeige rechts neben den Buttons (Trefferanzahl oder \"Nicht gefunden\").
+  - Alle Treffer werden dezent markiert; der aktuelle Treffer wird stärker hervorgehoben.
 
 ## Kontextmenü (Rechtsklick)
   - Im Editor-Textfeld und im Ausgabe-Feld per Rechtsklick öffnen.
@@ -2232,7 +2419,9 @@ Das Panel öffnet sich unterhalb der Tab-Leiste:
 
 #[cfg(test)]
 mod tests {
-    use super::{byte_offset_to_position, find_match_byte_offset, format_duration};
+    use super::{
+        byte_offset_to_position, collect_all_match_lines, find_match_byte_offset, format_duration,
+    };
 
     #[test]
     fn format_duration_below_1000ms() {
@@ -2313,5 +2502,76 @@ mod tests {
         // First "foo" at byte 0, second at byte 8
         assert_eq!(find_match_byte_offset(text, "foo", 0), Some(0));
         assert_eq!(find_match_byte_offset(text, "foo", 1), Some(8));
+    }
+
+    // --- collect_all_match_lines ---
+
+    #[test]
+    fn collect_all_match_lines_empty_needle() {
+        assert!(collect_all_match_lines("hello\nworld", "").is_empty());
+    }
+
+    #[test]
+    fn collect_all_match_lines_no_match() {
+        assert!(collect_all_match_lines("hello\nworld", "xyz").is_empty());
+    }
+
+    #[test]
+    fn collect_all_match_lines_single_line_two_matches() {
+        // Both matches are on line 0.
+        let lines = collect_all_match_lines("abcabc", "bc");
+        assert_eq!(lines, vec![0, 0]);
+    }
+
+    #[test]
+    fn collect_all_match_lines_multi_line() {
+        let text = "foo\nbar\nfoo";
+        let lines = collect_all_match_lines(text, "foo");
+        assert_eq!(lines, vec![0, 2]);
+    }
+
+    #[test]
+    fn collect_all_match_lines_unicode() {
+        // "ü" is 2 bytes; ensure we still count lines correctly.
+        let text = "über\nalles\nüber";
+        let lines = collect_all_match_lines(text, "über");
+        assert_eq!(lines, vec![0, 2]);
+    }
+
+    #[test]
+    fn collect_all_match_lines_emoji() {
+        // Each emoji may be 4 bytes; line counting must not be confused.
+        let text = "😀 hi\n😀 ho";
+        let lines = collect_all_match_lines(text, "😀");
+        assert_eq!(lines, vec![0, 1]);
+    }
+
+    // --- Unicode-safe replace ---
+
+    #[test]
+    fn replace_one_unicode_safe() {
+        // Replacing "ü" with "ue" must not corrupt surrounding bytes.
+        let text = "für dich\nfür mich";
+        let needle = "ü";
+        let replacement = "ue";
+        let positions: Vec<usize> = text.match_indices(needle).map(|(i, _)| i).collect();
+        assert_eq!(positions.len(), 2);
+        let mut result = text.to_string();
+        result.replace_range(positions[0]..positions[0] + needle.len(), replacement);
+        assert_eq!(result, "fuer dich\nfür mich");
+    }
+
+    #[test]
+    fn replace_all_unicode_safe() {
+        let text = "Größe und Größe";
+        let result = text.replace("Größe", "size");
+        assert_eq!(result, "size und size");
+    }
+
+    #[test]
+    fn replace_all_emoji() {
+        let text = "hello 🎉 world 🎉 end";
+        let result = text.replace("🎉", "!");
+        assert_eq!(result, "hello ! world ! end");
     }
 }
