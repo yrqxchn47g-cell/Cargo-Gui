@@ -1537,7 +1537,8 @@ impl App {
         let output_line_count = self.output_content.text().lines().count().max(1);
         let output_gutter = make_gutter(output_line_count);
         let output_hl = make_highlight_layer(self.output_highlight_line);
-        let output_stack: Element<'_, Msg> = stack![output_hl, output_te].into();
+        let zebra = make_zebra_overlay(output_line_count);
+        let output_stack: Element<'_, Msg> = stack![zebra, output_hl, output_te].into();
         let output = mouse_area(
             scrollable(row![output_gutter, output_stack]).height(Length::Fill),
         )
@@ -2130,6 +2131,30 @@ fn make_gutter<'a>(line_count: usize) -> Element<'a, Msg> {
         .padding([0, 4])
         .width(Length::Fixed(GUTTER_WIDTH))
         .into()
+}
+
+/// Build a zebra-stripe overlay for `line_count` lines.
+///
+/// Alternates between two subtly different background shades (even and odd
+/// rows) so individual output lines are easier to distinguish.
+fn make_zebra_overlay<'a>(line_count: usize) -> Element<'a, Msg> {
+    let bands: Vec<Element<'a, Msg>> = (0..line_count)
+        .map(|i| {
+            let bg = if i % 2 == 0 {
+                Color::from_rgba(0.15, 0.15, 0.18, 0.5)
+            } else {
+                Color::from_rgba(0.20, 0.20, 0.24, 0.5)
+            };
+            container(Space::new(Length::Fill, Length::Fixed(LINE_HEIGHT)))
+                .style(move |_theme| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    ..Default::default()
+                })
+                .width(Length::Fill)
+                .into()
+        })
+        .collect();
+    column(bands).width(Length::Fill).height(Length::Fill).into()
 }
 
 /// Build a virtual highlight-overlay element that colors one line.
