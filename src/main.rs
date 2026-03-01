@@ -830,7 +830,11 @@ impl App {
                         None => format!("1/{total}"),
                     };
                 }
-                Task::none()
+                if let Some(line) = self.editor_highlight_line {
+                    scroll_to_line(line)
+                } else {
+                    Task::none()
+                }
             }
 
             Msg::ReplaceTextChanged(s) => {
@@ -865,7 +869,11 @@ impl App {
                         };
                     }
                 }
-                Task::none()
+                if let Some(line) = self.editor_highlight_line {
+                    scroll_to_line(line)
+                } else {
+                    Task::none()
+                }
             }
 
             Msg::FindPrev => {
@@ -896,7 +904,11 @@ impl App {
                         };
                     }
                 }
-                Task::none()
+                if let Some(line) = self.editor_highlight_line {
+                    scroll_to_line(line)
+                } else {
+                    Task::none()
+                }
             }
 
             Msg::ReplaceOne => {
@@ -1881,7 +1893,9 @@ impl App {
                     .height(Length::Shrink);
                 let editor_stack: Element<'_, Msg> = stack![highlight, te].into();
                 mouse_area(
-                    scrollable(row![gutter, editor_stack]).height(Length::Fill),
+                    scrollable(row![gutter, editor_stack])
+                        .id(scrollable::Id::new("editor_scrollable"))
+                        .height(Length::Fill),
                 )
                 .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Editor))
                 .into()
@@ -2273,6 +2287,20 @@ fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize, cur
     }
 
     stack(layers).into()
+}
+
+/// Return a [`Task`] that scrolls the editor scrollable to `line`.
+///
+/// The y-offset is computed as `line * LINE_HEIGHT`.  The x-offset is left at
+/// 0 so the view is always scrolled to the left edge.
+fn scroll_to_line(line: usize) -> Task<Msg> {
+    scrollable::scroll_to(
+        scrollable::Id::new("editor_scrollable"),
+        scrollable::AbsoluteOffset {
+            x: 0.0,
+            y: line as f32 * LINE_HEIGHT,
+        },
+    )
 }
 
 /// Spawn a cargo process and return a [`Task`] that streams its output as
