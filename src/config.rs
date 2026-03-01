@@ -168,7 +168,7 @@ impl Config {
     ///
     /// Returns `None` when the platform provides no suitable config directory.
     pub fn config_path() -> Option<PathBuf> {
-        directories::ProjectDirs::from("", "", "cargo-gui")
+        directories::ProjectDirs::from("io.github", "cargo-gui", "cargo-gui")
             .map(|dirs| dirs.config_dir().join("config.toml"))
     }
 

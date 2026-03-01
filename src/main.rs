@@ -68,6 +68,13 @@ const MAX_LINES: usize = 5000;
 /// The message is intentionally in German to match the application locale.
 const TRIM_NOTICE: &str = "⚠ Hinweis: ältere Ausgabe wurde verworfen – max. 5000 Zeilen";
 
+/// Horizontal offset applied to the tooltip overlay to approximately centre it
+/// over the cursor (half of the assumed tooltip render width).
+const TOOLTIP_OFFSET_X: f32 = 60.0;
+
+/// Vertical offset that places the tooltip above the cursor.
+const TOOLTIP_OFFSET_Y: f32 = 34.0;
+
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
     ("Build", "build"),
@@ -635,10 +642,10 @@ impl App {
                 .into();
 
             // Position the tooltip above and horizontally centred over the
-            // cursor. We subtract 60 px to approximate centering since the
-            // actual render width is unknown at layout time.
-            let tip_x = (self.mouse_x - 60.0).max(0.0);
-            let tip_y = (self.mouse_y - 34.0).max(0.0);
+            // cursor.  See `TOOLTIP_OFFSET_X` / `TOOLTIP_OFFSET_Y` for the
+            // exact values.
+            let tip_x = (self.mouse_x - TOOLTIP_OFFSET_X).max(0.0);
+            let tip_y = (self.mouse_y - TOOLTIP_OFFSET_Y).max(0.0);
 
             let tip_layer: Element<'_, Msg> = column![
                 Space::with_height(Length::Fixed(tip_y)),
