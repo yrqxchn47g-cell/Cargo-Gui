@@ -1,14 +1,24 @@
 //! Cargo GUI — Iced 0.13 front-end for running cargo commands.
 //!
+//! ## Layout
+//! The main view consists of:
+//! - A topbar with a menu/hamburger icon and the app title.
+//! - A project directory row with path input + "Durchsuchen" (folder picker via rfd)
+//!   and "Als Start" (set working directory) buttons.
+//! - An arguments row with a label and text input.
+//! - A "Neues Projekt" row for running `cargo new`.
+//! - A "Cargo Befehle" 2-column grid of one-click cargo command buttons.
+//! - An "Ausgabe" terminal panel (ring-buffered `text_editor`) + "Ausgabe löschen".
+//! - A footer with Einstellungen / Editor / Hilfe / Beenden.
+//!
+//! ## Multi-view navigation
+//! `App::current_view` selects between Main / Settings / Editor / Help.
+//!
 //! ## Output-buffer design
 //! Output lines are stored in a ring buffer (`VecDeque<String>`) capped at
 //! `MAX_LINES`.  A dirty flag (`output_dirty`) is set on every new line; the
 //! `text_editor::Content` is rebuilt only when the `FlushOutput` tick fires
 //! (every 100 ms), avoiding O(n²) work when thousands of lines arrive rapidly.
-//!
-//! When the buffer is full the oldest line is discarded.  The *first* time this
-//! happens in a given run a German-language notice (`TRIM_NOTICE`) is prepended
-//! to the display (not stored in the buffer) so the cap is never exceeded.
 //!
 //! ## Cancellation design
 //! A `tokio::sync::oneshot` channel is created for each run.  The `Sender` half
@@ -26,7 +36,9 @@ use std::time::Duration;
 use futures::channel::mpsc;
 use futures::FutureExt as _;
 use futures::SinkExt as _;
-use iced::widget::{button, column, row, text, text_editor, text_input};
+use iced::widget::{
+    button, column, container, row, scrollable, text, text_editor, text_input, tooltip,
+};
 use iced::{Element, Length, Subscription, Task};
 use tokio::sync::oneshot;
 
@@ -41,6 +53,39 @@ const MAX_LINES: usize = 5000;
 /// The message is intentionally in German to match the application locale.
 const TRIM_NOTICE: &str =
     "⚠ Hinweis: ältere Ausgabe wurde verworfen – max. 5000 Zeilen";
+
+/// Cargo commands shown in the left column of the "Cargo Befehle" grid.
+const COMMANDS_LEFT: &[(&str, &str)] = &[
+    ("Build", "build"),
+    ("Run", "run"),
+    ("Test", "test"),
+    ("Check", "check"),
+    ("Fmt", "fmt"),
+    ("Clippy", "clippy"),
+];
+
+/// Cargo commands shown in the right column of the "Cargo Befehle" grid.
+const COMMANDS_RIGHT: &[(&str, &str)] = &[
+    ("Update", "update"),
+    ("New", "new"),
+    ("Init", "init"),
+    ("Clean", "clean"),
+    ("Doc", "doc"),
+    ("Bench", "bench"),
+];
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+
+/// Top-level navigation state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum View {
+    Main,
+    Settings,
+    Editor,
+    Help,
+}
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -57,9 +102,15 @@ fn main() -> iced::Result {
 // ---------------------------------------------------------------------------
 
 struct App {
+    /// Active navigation view.
+    current_view: View,
+
+    // --- Main view state ---
     project_path: String,
     /// Cargo sub-command + arguments, e.g. `"build --release"`.
     cargo_args: String,
+    /// Name for `cargo new <name>`.
+    new_project_name: String,
 
     /// Ring buffer of terminal output lines, capped at `MAX_LINES`.
     output_lines: VecDeque<String>,
@@ -77,13 +128,22 @@ struct App {
     stop_tx: Option<oneshot::Sender<()>>,
 
     status: String,
+
+    // --- Editor view state ---
+    editor_content: text_editor::Content,
+
+    // --- Settings view state ---
+    /// User-defined default project path restored on "Als Start".
+    default_path: String,
 }
 
 impl Default for App {
     fn default() -> Self {
         Self {
+            current_view: View::Main,
             project_path: String::new(),
             cargo_args: "build".to_string(),
+            new_project_name: String::new(),
             output_lines: VecDeque::new(),
             output_content: text_editor::Content::new(),
             output_dirty: false,
@@ -92,6 +152,8 @@ impl Default for App {
             current_job_id: 0,
             stop_tx: None,
             status: "Bereit".to_string(),
+            editor_content: text_editor::Content::new(),
+            default_path: String::new(),
         }
     }
 }
@@ -108,13 +170,34 @@ impl App {
 
 #[derive(Debug, Clone)]
 enum Msg {
+    // --- Navigation ---
+    NavigateTo(View),
+
+    // --- Main view ---
     PathChanged(String),
     ArgsChanged(String),
-    /// Start a new cargo run.
+    /// Open a native folder-picker dialog (rfd) to choose the project path.
+    BrowsePath,
+    /// Folder chosen via rfd dialog; `None` means the dialog was cancelled.
+    PathPicked(Option<String>),
+    /// Set `project_path` as the new `default_path`.
+    SetAsDefault,
+    /// Restore `project_path` from `default_path`.
+    RestoreDefault,
+
+    /// Name typed into the "cargo new" input.
+    NewProjectNameChanged(String),
+    /// Run `cargo new <new_project_name>` in `project_path`.
+    RunCargoNew,
+
+    /// One-click: set `cargo_args` to `cmd` then immediately run.
+    RunCommand(String),
+
+    /// Start a new cargo run (using `cargo_args`).
     Run,
     /// Request cancellation of the running cargo process.
     Stop,
-    /// One output line from the cargo process (monochrome; no RGB processing).
+    /// One output line from the cargo process.
     Append { line: String, job_id: u64 },
     /// The cargo process exited.
     Done { success: bool, job_id: u64 },
@@ -122,8 +205,19 @@ enum Msg {
     Clear,
     /// Periodic flush: rebuild `text_editor::Content` from the ring buffer if dirty.
     FlushOutput,
-    /// Pass-through for text-editor interactions (selection / cursor movement).
+    /// Pass-through for the output text-editor.
     OutputAction(text_editor::Action),
+
+    // --- Editor view ---
+    EditorAction(text_editor::Action),
+
+    // --- Settings view ---
+    DefaultPathChanged(String),
+    /// Confirm and persist the default path with a status notification.
+    SaveSettings,
+
+    // --- App ---
+    Quit,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,8 +225,16 @@ enum Msg {
 // ---------------------------------------------------------------------------
 
 impl App {
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
+            // --- Navigation ---
+            Msg::NavigateTo(view) => {
+                self.current_view = view;
+                Task::none()
+            }
+
+            // --- Path / project ---
             Msg::PathChanged(p) => {
                 self.project_path = p;
                 Task::none()
@@ -143,14 +245,64 @@ impl App {
                 Task::none()
             }
 
+            Msg::BrowsePath => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .pick_folder()
+                        .await
+                        .map(|h| h.path().to_string_lossy().into_owned())
+                },
+                Msg::PathPicked,
+            ),
+
+            Msg::PathPicked(maybe) => {
+                if let Some(p) = maybe {
+                    self.project_path = p;
+                }
+                Task::none()
+            }
+
+            Msg::SetAsDefault => {
+                self.default_path = self.project_path.clone();
+                self.status = "Startpfad gesetzt".to_string();
+                Task::none()
+            }
+
+            Msg::RestoreDefault => {
+                if !self.default_path.is_empty() {
+                    self.project_path = self.default_path.clone();
+                }
+                Task::none()
+            }
+
+            Msg::NewProjectNameChanged(n) => {
+                self.new_project_name = n;
+                Task::none()
+            }
+
+            Msg::RunCargoNew => {
+                if self.running || self.new_project_name.trim().is_empty() {
+                    return Task::none();
+                }
+                let new_args = format!("new {}", self.new_project_name.trim());
+                self.cargo_args = new_args;
+                self.update(Msg::Run)
+            }
+
+            Msg::RunCommand(cmd) => {
+                if self.running {
+                    return Task::none();
+                }
+                self.cargo_args = cmd;
+                self.update(Msg::Run)
+            }
+
+            // --- Run / Stop ---
             Msg::Run => {
                 if self.running {
                     return Task::none();
                 }
-                // Increment job id so any in-flight messages from the previous
-                // run are ignored.
                 self.current_job_id += 1;
-                // Reset the trim notice flag for this new run.
                 self.output_trimmed = false;
                 self.running = true;
                 self.status = "Läuft…".to_string();
@@ -174,16 +326,14 @@ impl App {
                 Task::none()
             }
 
+            // --- Output streaming ---
             Msg::Append { line, job_id } => {
-                // Discard messages that belong to a previous run.
                 if job_id != self.current_job_id {
                     return Task::none();
                 }
-                // Push to ring buffer; trim oldest entry when over cap.
                 self.output_lines.push_back(line);
                 if self.output_lines.len() > MAX_LINES {
                     self.output_lines.pop_front();
-                    // On the first trim, flag so flush() prepends the notice.
                     self.output_trimmed = true;
                 }
                 self.output_dirty = true;
@@ -201,7 +351,6 @@ impl App {
                 } else {
                     "Fehlgeschlagen ✗".to_string()
                 };
-                // Flush any remaining buffered lines immediately on completion.
                 flush_output(self);
                 Task::none()
             }
@@ -223,12 +372,31 @@ impl App {
             }
 
             Msg::OutputAction(action) => {
-                // Allow selection and cursor movement but not editing.
                 if !matches!(action, text_editor::Action::Edit(_)) {
                     self.output_content.perform(action);
                 }
                 Task::none()
             }
+
+            // --- Editor ---
+            Msg::EditorAction(action) => {
+                self.editor_content.perform(action);
+                Task::none()
+            }
+
+            // --- Settings ---
+            Msg::DefaultPathChanged(p) => {
+                self.default_path = p;
+                Task::none()
+            }
+
+            Msg::SaveSettings => {
+                self.status = "Einstellungen gespeichert ✓".to_string();
+                Task::none()
+            }
+
+            // --- App ---
+            Msg::Quit => iced::exit(),
         }
     }
 }
@@ -239,44 +407,369 @@ impl App {
 
 impl App {
     fn view(&self) -> Element<'_, Msg> {
+        let body: Element<'_, Msg> = match self.current_view {
+            View::Main => self.view_main(),
+            View::Settings => self.view_settings(),
+            View::Editor => self.view_editor(),
+            View::Help => self.view_help(),
+        };
+
+        let topbar = self.view_topbar();
+        let footer = self.view_footer();
+
+        column![topbar, body, footer].into()
+    }
+
+    // -----------------------------------------------------------------------
+    // Topbar
+    // -----------------------------------------------------------------------
+
+    fn view_topbar(&self) -> Element<'_, Msg> {
+        let menu_btn = tooltip(
+            button("☰").padding([4, 10]),
+            "Menü",
+            tooltip::Position::Bottom,
+        );
+
+        let title = text("Cargo GUI").size(20);
+
+        container(
+            row![menu_btn, title]
+                .spacing(10)
+                .align_y(iced::Alignment::Center)
+                .padding([6, 10]),
+        )
+        .style(container::bordered_box)
+        .width(Length::Fill)
+        .into()
+    }
+
+    // -----------------------------------------------------------------------
+    // Footer
+    // -----------------------------------------------------------------------
+
+    fn view_footer(&self) -> Element<'_, Msg> {
+        let settings_btn = tooltip(
+            button("⚙ Einstellungen")
+                .on_press(Msg::NavigateTo(View::Settings))
+                .padding([5, 10]),
+            "Einstellungen öffnen",
+            tooltip::Position::Top,
+        );
+
+        let editor_btn = tooltip(
+            button("✏ Editor")
+                .on_press(Msg::NavigateTo(View::Editor))
+                .padding([5, 10]),
+            "Datei-Editor öffnen",
+            tooltip::Position::Top,
+        );
+
+        let help_btn = tooltip(
+            button("? Hilfe")
+                .on_press(Msg::NavigateTo(View::Help))
+                .padding([5, 10]),
+            "Bedienungsanleitung öffnen",
+            tooltip::Position::Top,
+        );
+
+        let quit_btn = tooltip(
+            button("✕ Beenden")
+                .on_press(Msg::Quit)
+                .padding([5, 10]),
+            "Anwendung beenden",
+            tooltip::Position::Top,
+        );
+
+        let status_text = text(format!("Status: {}", self.status)).size(13);
+
+        container(
+            row![settings_btn, editor_btn, help_btn, quit_btn, status_text]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .padding([6, 10]),
+        )
+        .style(container::bordered_box)
+        .width(Length::Fill)
+        .into()
+    }
+
+    // -----------------------------------------------------------------------
+    // Main view
+    // -----------------------------------------------------------------------
+
+    fn view_main(&self) -> Element<'_, Msg> {
+        // -- Project directory row --
         let path_input = text_input("Projektpfad…", &self.project_path)
             .on_input(Msg::PathChanged)
             .padding(5);
 
-        let args_input = text_input("cargo-Befehl…", &self.cargo_args)
+        let browse_btn = tooltip(
+            button("📂 Durchsuchen")
+                .on_press(Msg::BrowsePath)
+                .padding([5, 10]),
+            "Projektordner auswählen",
+            tooltip::Position::Bottom,
+        );
+
+        let set_default_btn = tooltip(
+            button("Als Start")
+                .on_press(Msg::SetAsDefault)
+                .padding([5, 10]),
+            "Diesen Pfad als Standardpfad speichern",
+            tooltip::Position::Bottom,
+        );
+
+        let path_row = row![
+            text("Projektverzeichnis:").size(13).width(150),
+            path_input,
+            browse_btn,
+            set_default_btn,
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center)
+        .padding([4, 8]);
+
+        // -- Arguments row --
+        let args_input = text_input("z.B. build --release", &self.cargo_args)
             .on_input(Msg::ArgsChanged)
-            .width(180)
+            .on_submit(Msg::Run)
             .padding(5);
 
-        // Run button — disabled while a process is running.
-        let run_btn = button("▶ Ausführen")
-            .on_press_maybe((!self.running).then_some(Msg::Run))
-            .padding([5, 10]);
+        let run_btn = tooltip(
+            button("▶ Ausführen")
+                .on_press_maybe((!self.running).then_some(Msg::Run))
+                .padding([5, 10]),
+            "Cargo-Befehl ausführen",
+            tooltip::Position::Bottom,
+        );
 
-        // Stop button — enabled only while a process is running.
-        let stop_btn = button("■ Stop")
-            .on_press_maybe(self.running.then_some(Msg::Stop))
-            .padding([5, 10]);
+        let stop_btn = tooltip(
+            button("■ Stop")
+                .on_press_maybe(self.running.then_some(Msg::Stop))
+                .padding([5, 10]),
+            "Laufenden Prozess abbrechen",
+            tooltip::Position::Bottom,
+        );
 
-        let clear_btn = button("Löschen")
-            .on_press(Msg::Clear)
-            .padding([5, 10]);
+        let args_row = row![
+            text("Argumente:").size(13).width(150),
+            args_input,
+            run_btn,
+            stop_btn,
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center)
+        .padding([4, 8]);
 
-        let controls = row![path_input, args_input, run_btn, stop_btn, clear_btn]
-            .spacing(8)
-            .padding(8);
+        // -- New project row --
+        let new_name_input = text_input("Projektname…", &self.new_project_name)
+            .on_input(Msg::NewProjectNameChanged)
+            .on_submit(Msg::RunCargoNew)
+            .padding(5);
 
-        // Terminal output — kept as text_editor for selection/copy support.
+        let cargo_new_btn = tooltip(
+            button("cargo new")
+                .on_press_maybe(
+                    (!self.running && !self.new_project_name.trim().is_empty())
+                        .then_some(Msg::RunCargoNew),
+                )
+                .padding([5, 10]),
+            "Neues Cargo-Projekt anlegen",
+            tooltip::Position::Bottom,
+        );
+
+        let new_row = row![
+            text("Neues Projekt:").size(13).width(150),
+            new_name_input,
+            cargo_new_btn,
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center)
+        .padding([4, 8]);
+
+        // -- Cargo Befehle grid (2 columns) --
+        let left_col = column(
+            COMMANDS_LEFT
+                .iter()
+                .map(|(label, cmd)| {
+                    let cmd_str = cmd.to_string();
+                    tooltip(
+                        button(*label)
+                            .on_press_maybe(
+                                (!self.running).then_some(Msg::RunCommand(cmd_str)),
+                            )
+                            .width(110)
+                            .padding([5, 8]),
+                        text(format!("cargo {cmd}")),
+                        tooltip::Position::Right,
+                    )
+                    .into()
+                })
+                .collect::<Vec<_>>(),
+        )
+        .spacing(4);
+
+        let right_col = column(
+            COMMANDS_RIGHT
+                .iter()
+                .map(|(label, cmd)| {
+                    let cmd_str = cmd.to_string();
+                    tooltip(
+                        button(*label)
+                            .on_press_maybe(
+                                (!self.running).then_some(Msg::RunCommand(cmd_str)),
+                            )
+                            .width(110)
+                            .padding([5, 8]),
+                        text(format!("cargo {cmd}")),
+                        tooltip::Position::Right,
+                    )
+                    .into()
+                })
+                .collect::<Vec<_>>(),
+        )
+        .spacing(4);
+
+        let commands_grid = row![left_col, right_col].spacing(8);
+
+        let commands_section = column![
+            text("Cargo Befehle").size(15),
+            commands_grid,
+        ]
+        .spacing(6)
+        .padding([4, 8]);
+
+        // -- Output section --
+        let clear_btn = tooltip(
+            button("Ausgabe löschen")
+                .on_press(Msg::Clear)
+                .padding([5, 10]),
+            "Ausgabe leeren und Status zurücksetzen",
+            tooltip::Position::Bottom,
+        );
+
+        let output_header = row![
+            text("Ausgabe").size(15),
+            clear_btn,
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+
         let output = text_editor(&self.output_content)
             .on_action(Msg::OutputAction)
             .height(Length::Fill);
 
-        let status_bar = row![text(format!("Status: {}", self.status)).size(13)].padding(4);
-
-        column![controls, output, status_bar]
+        let output_section = column![output_header, output]
             .spacing(4)
+            .padding([4, 8]);
+
+        // -- Layout: left side has inputs + commands; right side is larger output --
+        let left_panel = scrollable(
+            column![path_row, args_row, new_row, commands_section]
+                .spacing(4)
+                .width(420),
+        );
+
+        let main_content = row![left_panel, output_section]
+            .spacing(8)
             .padding(8)
-            .into()
+            .height(Length::Fill);
+
+        main_content.into()
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings view
+    // -----------------------------------------------------------------------
+
+    fn view_settings(&self) -> Element<'_, Msg> {
+        let back_btn = button("← Zurück")
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10]);
+
+        let default_path_input =
+            text_input("Standard-Projektpfad…", &self.default_path)
+                .on_input(Msg::DefaultPathChanged)
+                .padding(5);
+
+        let save_btn = tooltip(
+            button("Speichern")
+                .on_press(Msg::SaveSettings)
+                .padding([5, 10]),
+            "Einstellungen übernehmen",
+            tooltip::Position::Bottom,
+        );
+
+        let default_path_row = row![
+            text("Standard-Pfad:").size(13).width(160),
+            default_path_input,
+            save_btn,
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+
+        let restore_btn = tooltip(
+            button("Standard-Pfad laden")
+                .on_press(Msg::RestoreDefault)
+                .padding([5, 10]),
+            "Standard-Pfad in das Projektverzeichnis-Feld laden",
+            tooltip::Position::Bottom,
+        );
+
+        column![
+            row![back_btn, text("Einstellungen").size(18)].spacing(10),
+            default_path_row,
+            restore_btn,
+        ]
+        .spacing(12)
+        .padding(16)
+        .height(Length::Fill)
+        .into()
+    }
+
+    // -----------------------------------------------------------------------
+    // Editor view
+    // -----------------------------------------------------------------------
+
+    fn view_editor(&self) -> Element<'_, Msg> {
+        let back_btn = button("← Zurück")
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10]);
+
+        let editor = text_editor(&self.editor_content)
+            .on_action(Msg::EditorAction)
+            .height(Length::Fill);
+
+        column![
+            row![back_btn, text("Editor").size(18)].spacing(10),
+            editor,
+        ]
+        .spacing(8)
+        .padding(16)
+        .height(Length::Fill)
+        .into()
+    }
+
+    // -----------------------------------------------------------------------
+    // Help view
+    // -----------------------------------------------------------------------
+
+    fn view_help(&self) -> Element<'_, Msg> {
+        let back_btn = button("← Zurück")
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10]);
+
+        let help_text = text(HELP_TEXT).size(13);
+
+        column![
+            row![back_btn, text("Hilfe / Bedienungsanleitung").size(18)].spacing(10),
+            scrollable(help_text).height(Length::Fill),
+        ]
+        .spacing(8)
+        .padding(16)
+        .height(Length::Fill)
+        .into()
     }
 }
 
@@ -329,7 +822,6 @@ fn run_cargo(
     use tokio::io::{AsyncBufReadExt, BufReader as AsyncBufReader};
     use tokio::process::Command;
 
-    // Channel that forwards messages produced by the async task back to iced.
     let (mut tx, rx) = mpsc::channel::<Msg>(256);
 
     tokio::spawn(async move {
@@ -341,7 +833,6 @@ fn run_cargo(
             .current_dir(&working_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            // Kill the child automatically if this task is dropped.
             .kill_on_drop(true)
             .spawn()
         {
@@ -366,9 +857,6 @@ fn run_cargo(
         let mut stdout_done = false;
         let mut stderr_done = false;
 
-        // Fuse the cancellation future so that after it resolves once (whether
-        // via an explicit send() or a sender drop) it will not be polled again.
-        // A sender drop without send() is NOT treated as a cancellation request.
         let mut stop_rx = stop_rx.fuse();
 
         loop {
@@ -377,9 +865,7 @@ fn run_cargo(
             }
 
             tokio::select! {
-                // Match only the success case (explicit Stop request).
                 Ok(()) = &mut stop_rx => {
-                    // Kill the child process on explicit stop.
                     let _ = child.kill().await;
                     let _ = tx
                         .send(Msg::Append {
@@ -415,6 +901,59 @@ fn run_cargo(
         let _ = tx.send(Msg::Done { success, job_id }).await;
     });
 
-    // Stream the mpsc receiver as a Task so iced processes each message.
     Task::stream(rx)
 }
+
+// ---------------------------------------------------------------------------
+// Help text
+// ---------------------------------------------------------------------------
+
+const HELP_TEXT: &str = "\
+Cargo GUI — Bedienungsanleitung
+================================
+
+Cargo GUI ist eine grafische Benutzeroberfläche für den Rust-Paketmanager Cargo.
+
+## Projektverzeichnis
+Geben Sie den Pfad zu Ihrem Rust-Projekt ein oder klicken Sie auf \"📂 Durchsuchen\",
+um einen Ordner auszuwählen. Mit \"Als Start\" speichern Sie den Pfad als Standard.
+
+## Argumente
+Tragen Sie den gewünschten Cargo-Befehl ein, z.B.:
+  build --release
+  test -- --nocapture
+  run -- arg1 arg2
+
+## Cargo Befehle (Schnellzugriff)
+Die Schaltflächen führen den jeweiligen Cargo-Befehl direkt aus:
+  Build    — Kompiliert das Projekt (cargo build)
+  Run      — Kompiliert und startet das Projekt (cargo run)
+  Test     — Führt alle Tests aus (cargo test)
+  Check    — Prüft Syntax ohne Kompilierung (cargo check)
+  Fmt      — Formatiert den Quellcode (cargo fmt)
+  Clippy   — Führt den Linter aus (cargo clippy)
+  Update   — Aktualisiert Abhängigkeiten (cargo update)
+  New      — Neues Projekt anlegen (cargo new)
+  Init     — Aktuelles Verzeichnis initialisieren (cargo init)
+  Clean    — Build-Artefakte löschen (cargo clean)
+  Doc      — Dokumentation generieren (cargo doc)
+  Bench    — Benchmarks ausführen (cargo bench)
+
+## Neues Projekt
+Geben Sie einen Projektnamen ein und klicken Sie auf \"cargo new\", um ein
+neues Rust-Projekt im ausgewählten Verzeichnis anzulegen.
+
+## Ausgabe
+Die Ausgabe des letzten Cargo-Laufs wird hier angezeigt. Sie können Text
+selektieren und kopieren. Mit \"Ausgabe löschen\" wird die Ausgabe zurückgesetzt.
+
+## Stop
+Während ein Cargo-Prozess läuft, können Sie ihn mit \"■ Stop\" abbrechen.
+
+## Einstellungen
+Unter \"⚙ Einstellungen\" können Sie den Standard-Projektpfad festlegen.
+
+## Editor
+Unter \"✏ Editor\" steht ein einfacher Texteditor zur Verfügung.
+";
+
