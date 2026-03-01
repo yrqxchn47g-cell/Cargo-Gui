@@ -54,7 +54,7 @@ use iced::widget::{
     button, column, container, horizontal_space, mouse_area, pick_list, row, scrollable, stack,
     text, text_editor, text_input, Space,
 };
-use iced::{Color, Element, Length, Subscription, Task};
+use iced::{clipboard, Color, Element, Length, Subscription, Task};
 use tokio::sync::oneshot;
 
 // ---------------------------------------------------------------------------
@@ -108,6 +108,27 @@ enum View {
     Settings,
     Editor,
     Help,
+}
+
+// ---------------------------------------------------------------------------
+// Context menu
+// ---------------------------------------------------------------------------
+
+/// Which widget was right-clicked to open the context menu.
+#[derive(Debug, Clone)]
+enum ContextMenuKind {
+    Editor,
+    Output,
+}
+
+/// Transient state while a context menu is visible.
+#[derive(Debug, Clone)]
+struct ContextMenuState {
+    /// Logical-pixel X where the menu should appear.
+    x: f32,
+    /// Logical-pixel Y where the menu should appear.
+    y: f32,
+    kind: ContextMenuKind,
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +242,22 @@ struct App {
     /// Running counter for generating "Untitled-N" titles.
     untitled_counter: usize,
 
+    // --- Find/Replace panel state ---
+    /// Whether the find/replace panel is visible in the editor view.
+    find_replace_open: bool,
+    /// Current search string.
+    find_text: String,
+    /// Current replacement string.
+    replace_text: String,
+    /// Status message shown in the find/replace panel (e.g. "3 Treffer" or "Nicht gefunden").
+    find_status: String,
+    /// 0-based index of the match that will be acted on by "Nächstes" / "Ersetzen".
+    find_current_match: usize,
+
+    // --- Context menu state ---
+    /// Non-None when a context menu is currently visible.
+    context_menu: Option<ContextMenuState>,
+
     // --- Tooltip overlay state ---
     /// Text to show in the global tooltip, or `None` when hidden.
     tooltip_text: Option<String>,
@@ -257,6 +294,12 @@ impl App {
                 editor_tabs,
                 active_tab: 0,
                 untitled_counter: 1,
+                find_replace_open: false,
+                find_text: String::new(),
+                replace_text: String::new(),
+                find_status: String::new(),
+                find_current_match: 0,
+                context_menu: None,
                 tooltip_text: None,
                 mouse_x: 0.0,
                 mouse_y: 0.0,
@@ -328,6 +371,38 @@ enum Msg {
     OpenFile,
     /// File chosen via rfd; `None` means the dialog was cancelled.
     FilePicked(Option<(PathBuf, String)>),
+
+    // --- Find / Replace ---
+    /// Toggle the find/replace panel open or closed.
+    ToggleFindReplace,
+    /// Search text field changed.
+    FindTextChanged(String),
+    /// Replace text field changed.
+    ReplaceTextChanged(String),
+    /// Jump to the next match.
+    FindNext,
+    /// Jump to the previous match.
+    FindPrev,
+    /// Replace the current match and advance.
+    ReplaceOne,
+    /// Replace every occurrence in the active tab.
+    ReplaceAll,
+
+    // --- Context menu ---
+    /// Open the context menu at the current mouse position for `kind`.
+    ShowContextMenu(ContextMenuKind),
+    /// Close / dismiss the context menu without performing any action.
+    HideContextMenu,
+    /// Copy the current selection to the clipboard.
+    ContextCopy,
+    /// Cut the current selection (copy + delete).
+    ContextCut,
+    /// Paste from the clipboard (triggers an async clipboard read).
+    ContextPaste,
+    /// Select all text in the focused widget.
+    ContextSelectAll,
+    /// Clipboard read completed; insert into the active editor.
+    PasteText(Option<String>),
 
     // --- Settings view ---
     DefaultPathChanged(String),
@@ -591,6 +666,214 @@ impl App {
                 Task::none()
             }
 
+            // --- Find / Replace ---
+            Msg::ToggleFindReplace => {
+                self.find_replace_open = !self.find_replace_open;
+                if !self.find_replace_open {
+                    self.find_status.clear();
+                }
+                Task::none()
+            }
+
+            Msg::FindTextChanged(s) => {
+                self.find_text = s;
+                self.find_current_match = 0;
+                self.find_status = count_matches_status(
+                    self.editor_tabs.get(self.active_tab),
+                    &self.find_text,
+                );
+                Task::none()
+            }
+
+            Msg::ReplaceTextChanged(s) => {
+                self.replace_text = s;
+                Task::none()
+            }
+
+            Msg::FindNext => {
+                if self.find_text.is_empty() {
+                    return Task::none();
+                }
+                let total = count_matches(
+                    self.editor_tabs.get(self.active_tab),
+                    &self.find_text,
+                );
+                if total == 0 {
+                    self.find_status = "Nicht gefunden".to_string();
+                } else {
+                    self.find_current_match =
+                        (self.find_current_match + 1) % total;
+                    self.find_status =
+                        format!("{}/{}", self.find_current_match + 1, total);
+                }
+                Task::none()
+            }
+
+            Msg::FindPrev => {
+                if self.find_text.is_empty() {
+                    return Task::none();
+                }
+                let total = count_matches(
+                    self.editor_tabs.get(self.active_tab),
+                    &self.find_text,
+                );
+                if total == 0 {
+                    self.find_status = "Nicht gefunden".to_string();
+                } else {
+                    // Wrap backwards: when at index 0, jump to the last match.
+                    self.find_current_match =
+                        self.find_current_match.checked_sub(1).unwrap_or(total - 1);
+                    self.find_status =
+                        format!("{}/{}", self.find_current_match + 1, total);
+                }
+                Task::none()
+            }
+
+            Msg::ReplaceOne => {
+                if self.find_text.is_empty() {
+                    return Task::none();
+                }
+                if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                    let full = tab.content.text();
+                    let needle = &self.find_text;
+                    let replacement = &self.replace_text;
+                    // Collect all match byte-positions.
+                    let positions: Vec<usize> = full
+                        .match_indices(needle.as_str())
+                        .map(|(i, _)| i)
+                        .collect();
+                    if positions.is_empty() {
+                        self.find_status = "Nicht gefunden".to_string();
+                    } else {
+                        let idx = self.find_current_match % positions.len();
+                        let pos = positions[idx];
+                        let mut new_text = full.clone();
+                        new_text.replace_range(pos..pos + needle.len(), replacement);
+                        tab.content = text_editor::Content::with_text(&new_text);
+                        tab.dirty = true;
+                        // Advance to next match (count may have changed).
+                        let new_total = count_matches(Some(tab), needle);
+                        if new_total == 0 {
+                            self.find_current_match = 0;
+                            self.find_status = "Nicht gefunden".to_string();
+                        } else {
+                            self.find_current_match =
+                                self.find_current_match % new_total;
+                            self.find_status =
+                                format!("{}/{}", self.find_current_match + 1, new_total);
+                        }
+                    }
+                }
+                Task::none()
+            }
+
+            Msg::ReplaceAll => {
+                if self.find_text.is_empty() {
+                    return Task::none();
+                }
+                if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                    let full = tab.content.text();
+                    let count = full.matches(self.find_text.as_str()).count();
+                    if count == 0 {
+                        self.find_status = "Nicht gefunden".to_string();
+                    } else {
+                        let new_text = full.replace(self.find_text.as_str(), self.replace_text.as_str());
+                        tab.content = text_editor::Content::with_text(&new_text);
+                        tab.dirty = true;
+                        self.find_current_match = 0;
+                        self.find_status = format!("{count} ersetzt");
+                    }
+                }
+                Task::none()
+            }
+
+            // --- Context menu ---
+            Msg::ShowContextMenu(kind) => {
+                self.context_menu = Some(ContextMenuState {
+                    x: self.mouse_x,
+                    y: self.mouse_y,
+                    kind,
+                });
+                Task::none()
+            }
+
+            Msg::HideContextMenu => {
+                self.context_menu = None;
+                Task::none()
+            }
+
+            Msg::ContextCopy => {
+                let selected = match self.context_menu.as_ref().map(|m| &m.kind) {
+                    Some(ContextMenuKind::Editor) => self
+                        .editor_tabs
+                        .get(self.active_tab)
+                        .and_then(|t| t.content.selection()),
+                    Some(ContextMenuKind::Output) => self.output_content.selection(),
+                    None => None,
+                };
+                self.context_menu = None;
+                if let Some(text) = selected {
+                    clipboard::write(text)
+                } else {
+                    Task::none()
+                }
+            }
+
+            Msg::ContextCut => {
+                // Copy selection, then delete it (editor only).
+                let selected = self
+                    .editor_tabs
+                    .get(self.active_tab)
+                    .and_then(|t| t.content.selection());
+                self.context_menu = None;
+                if let Some(sel_text) = selected {
+                    // Delete selection by performing Backspace (iced deletes
+                    // the active selection when one exists).
+                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                        tab.content
+                            .perform(text_editor::Action::Edit(text_editor::Edit::Backspace));
+                        tab.dirty = true;
+                    }
+                    clipboard::write(sel_text)
+                } else {
+                    Task::none()
+                }
+            }
+
+            Msg::ContextPaste => {
+                self.context_menu = None;
+                clipboard::read().map(Msg::PasteText)
+            }
+
+            Msg::ContextSelectAll => {
+                match self.context_menu.as_ref().map(|m| &m.kind) {
+                    Some(ContextMenuKind::Editor) => {
+                        if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                            tab.content.perform(text_editor::Action::SelectAll);
+                        }
+                    }
+                    Some(ContextMenuKind::Output) => {
+                        self.output_content.perform(text_editor::Action::SelectAll);
+                    }
+                    None => {}
+                }
+                self.context_menu = None;
+                Task::none()
+            }
+
+            Msg::PasteText(maybe) => {
+                if let Some(text) = maybe {
+                    use std::sync::Arc;
+                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                        tab.content.perform(text_editor::Action::Edit(
+                            text_editor::Edit::Paste(Arc::new(text)),
+                        ));
+                        tab.dirty = true;
+                    }
+                }
+                Task::none()
+            }
+
             // --- Settings ---
             Msg::DefaultPathChanged(p) => {
                 self.config.default_path = p;
@@ -652,6 +935,79 @@ impl App {
 
         let main_col: Element<'_, Msg> = column![topbar, body, footer].into();
 
+        // ---- Context menu overlay ----
+        let with_ctx: Element<'_, Msg> = if let Some(cm) = &self.context_menu {
+            let is_editor = matches!(cm.kind, ContextMenuKind::Editor);
+            let dismiss_bg: Element<'_, Msg> = mouse_area(
+                Space::new(Length::Fill, Length::Fill),
+            )
+            .on_press(Msg::HideContextMenu)
+            .into();
+
+            // Build menu items.
+            let copy_btn = button("📋 Kopieren (Copy)")
+                .on_press(Msg::ContextCopy)
+                .width(Length::Fill)
+                .padding([4, 10]);
+            let selectall_btn = button("☰ Alles auswählen (Select All)")
+                .on_press(Msg::ContextSelectAll)
+                .width(Length::Fill)
+                .padding([4, 10]);
+
+            let mut menu_col = column![copy_btn, selectall_btn].spacing(2);
+
+            if is_editor {
+                let cut_btn = button("✂ Ausschneiden (Cut)")
+                    .on_press(Msg::ContextCut)
+                    .width(Length::Fill)
+                    .padding([4, 10]);
+                let paste_btn = button("📄 Einfügen (Paste)")
+                    .on_press(Msg::ContextPaste)
+                    .width(Length::Fill)
+                    .padding([4, 10]);
+                let find_btn = button("🔍 Suchen/Ersetzen…")
+                    .on_press(Msg::ToggleFindReplace)
+                    .width(Length::Fill)
+                    .padding([4, 10]);
+                menu_col = menu_col.push(cut_btn).push(paste_btn).push(find_btn);
+            }
+
+            let menu_box: Element<'_, Msg> = container(menu_col)
+                .style(|_theme| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(Color::from_rgba(
+                        0.15, 0.15, 0.18, 0.97,
+                    ))),
+                    border: iced::Border {
+                        color: Color::from_rgba(0.4, 0.4, 0.4, 1.0),
+                        width: 1.0,
+                        radius: 5.0.into(),
+                    },
+                    text_color: Some(Color::WHITE),
+                    shadow: iced::Shadow {
+                        color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+                        offset: iced::Vector::new(2.0, 2.0),
+                        blur_radius: 6.0,
+                    },
+                })
+                .padding([4, 0])
+                .width(220)
+                .into();
+
+            let menu_layer: Element<'_, Msg> = column![
+                Space::with_height(Length::Fixed(cm.y.max(0.0))),
+                row![
+                    Space::with_width(Length::Fixed(cm.x.max(0.0))),
+                    menu_box,
+                ],
+            ]
+            .width(Length::Fill)
+            .into();
+
+            stack![main_col, dismiss_bg, menu_layer].into()
+        } else {
+            main_col
+        };
+
         // ---- Tooltip overlay ----
         if let Some(tip) = &self.tooltip_text {
             let tip_box: Element<'_, Msg> = container(text(tip.as_str()).size(12))
@@ -683,9 +1039,9 @@ impl App {
             .width(Length::Fill)
             .into();
 
-            stack![main_col, tip_layer].into()
+            stack![with_ctx, tip_layer].into()
         } else {
-            main_col
+            with_ctx
         }
     }
 
@@ -852,12 +1208,12 @@ impl App {
             let duration_label = self
                 .last_durations
                 .get(&cmd_str)
-                .map(|ms| format!("{ms} ms"))
+                .map(|&ms| format_duration(ms))
                 .unwrap_or_else(|| "?".to_string());
             let btn_label = if self.running && self.running_cmd == cmd_str {
                 format!(
-                    "{label}\nest:{duration_label} jetzt:{} ms",
-                    self.display_elapsed_ms
+                    "{label}\nest:{duration_label} jetzt:{}",
+                    format_duration(self.display_elapsed_ms)
                 )
             } else {
                 format!("{label} (est:{duration_label})")
@@ -895,9 +1251,12 @@ impl App {
             .spacing(8)
             .align_y(iced::Alignment::Center);
 
-        let output = text_editor(&self.output_content)
-            .on_action(Msg::OutputAction)
-            .height(Length::Fill);
+        let output = mouse_area(
+            text_editor(&self.output_content)
+                .on_action(Msg::OutputAction)
+                .height(Length::Fill),
+        )
+        .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Output));
 
         let output_section = column![output_header, output].spacing(4).padding([4, 8]);
 
@@ -995,9 +1354,12 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_editor(&self) -> Element<'_, Msg> {
-        let back_btn = button("← Zurück")
-            .on_press(Msg::NavigateTo(View::Main))
-            .padding([5, 10]);
+        let back_btn = hover_tip(
+            button("← Zurück")
+                .on_press(Msg::NavigateTo(View::Main))
+                .padding([5, 10]),
+            "Zurück zur Hauptansicht".to_string(),
+        );
 
         let new_tab_btn = hover_tip(
             button("+ Neu").on_press(Msg::TabNew).padding([5, 10]),
@@ -1009,6 +1371,18 @@ impl App {
             "Datei öffnen".to_string(),
         );
 
+        let find_replace_toggle_label = if self.find_replace_open {
+            "🔍 Suchen ✕"
+        } else {
+            "🔍 Suchen"
+        };
+        let find_btn = hover_tip(
+            button(find_replace_toggle_label)
+                .on_press(Msg::ToggleFindReplace)
+                .padding([5, 10]),
+            "Suchen & Ersetzen-Panel ein-/ausblenden".to_string(),
+        );
+
         // -- Tab bar --
         let tab_bar = row(self
             .editor_tabs
@@ -1018,19 +1392,29 @@ impl App {
                 let is_active = i == self.active_tab;
                 let label = tab.display_title();
 
-                let tab_btn = button(text(label).size(13))
-                    .on_press(Msg::TabSelect(i))
-                    .padding([4, 8])
-                    .style(if is_active {
-                        button::primary
+                let tab_btn = hover_tip(
+                    button(text(label).size(13))
+                        .on_press(Msg::TabSelect(i))
+                        .padding([4, 8])
+                        .style(if is_active {
+                            button::primary
+                        } else {
+                            button::secondary
+                        }),
+                    if is_active {
+                        "Aktiver Tab".to_string()
                     } else {
-                        button::secondary
-                    });
+                        "Zu diesem Tab wechseln".to_string()
+                    },
+                );
 
-                let close_btn = button(text("✕").size(11))
-                    .on_press(Msg::TabClose(i))
-                    .padding([4, 6])
-                    .style(button::danger);
+                let close_btn = hover_tip(
+                    button(text("✕").size(11))
+                        .on_press(Msg::TabClose(i))
+                        .padding([4, 6])
+                        .style(button::danger),
+                    "Tab schließen".to_string(),
+                );
 
                 row![tab_btn, close_btn]
                     .spacing(2)
@@ -1040,22 +1424,96 @@ impl App {
             .collect::<Vec<_>>())
         .spacing(4);
 
-        // -- Active editor --
+        // -- Find / Replace panel --
+        let find_replace_panel: Option<Element<'_, Msg>> = if self.find_replace_open {
+            let find_input = hover_tip(
+                text_input("Suchen…", &self.find_text)
+                    .on_input(Msg::FindTextChanged)
+                    .on_submit(Msg::FindNext)
+                    .padding([4, 6])
+                    .width(180),
+                "Suchtext eingeben".to_string(),
+            );
+            let replace_input = hover_tip(
+                text_input("Ersetzen durch…", &self.replace_text)
+                    .on_input(Msg::ReplaceTextChanged)
+                    .on_submit(Msg::ReplaceOne)
+                    .padding([4, 6])
+                    .width(180),
+                "Ersetzungstext eingeben".to_string(),
+            );
+            let next_btn = hover_tip(
+                button("▼ Nächstes").on_press(Msg::FindNext).padding([4, 8]),
+                "Nächstes Vorkommen suchen".to_string(),
+            );
+            let prev_btn = hover_tip(
+                button("▲ Vorheriges").on_press(Msg::FindPrev).padding([4, 8]),
+                "Vorheriges Vorkommen suchen".to_string(),
+            );
+            let replace_btn = hover_tip(
+                button("Ersetzen").on_press(Msg::ReplaceOne).padding([4, 8]),
+                "Aktuelles Vorkommen ersetzen".to_string(),
+            );
+            let replace_all_btn = hover_tip(
+                button("Alle ersetzen")
+                    .on_press(Msg::ReplaceAll)
+                    .padding([4, 8]),
+                "Alle Vorkommen ersetzen".to_string(),
+            );
+            let close_btn = hover_tip(
+                button("✕")
+                    .on_press(Msg::ToggleFindReplace)
+                    .padding([4, 6])
+                    .style(button::danger),
+                "Suchen/Ersetzen-Panel schließen".to_string(),
+            );
+            let status_text = text(self.find_status.as_str()).size(12);
+
+            let panel = container(
+                row![
+                    text("Suchen:").size(12),
+                    find_input,
+                    text("Ersetzen:").size(12),
+                    replace_input,
+                    prev_btn,
+                    next_btn,
+                    replace_btn,
+                    replace_all_btn,
+                    status_text,
+                    horizontal_space(),
+                    close_btn,
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center)
+                .padding([4, 8]),
+            )
+            .style(container::bordered_box)
+            .width(Length::Fill);
+
+            Some(panel.into())
+        } else {
+            None
+        };
+
+        // -- Active editor (wrapped for right-click context menu) --
         let editor_widget: Element<'_, Msg> =
             if let Some(tab) = self.editor_tabs.get(self.active_tab) {
-                text_editor(&tab.content)
+                let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
-                    .height(Length::Fill)
+                    .height(Length::Fill);
+                mouse_area(te)
+                    .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Editor))
                     .into()
             } else {
                 text("Kein Tab ausgewählt").into()
             };
 
-        column![
+        let mut col = column![
             row![
                 back_btn,
                 text("Editor").size(18),
                 horizontal_space(),
+                find_btn,
                 new_tab_btn,
                 open_btn
             ]
@@ -1064,12 +1522,16 @@ impl App {
             scrollable(tab_bar).direction(scrollable::Direction::Horizontal(
                 scrollable::Scrollbar::default(),
             )),
-            editor_widget,
         ]
         .spacing(8)
         .padding(16)
-        .height(Length::Fill)
-        .into()
+        .height(Length::Fill);
+
+        if let Some(panel) = find_replace_panel {
+            col = col.push(panel);
+        }
+
+        col.push(editor_widget).into()
     }
 
     // -----------------------------------------------------------------------
@@ -1136,6 +1598,41 @@ fn hover_tip<'a>(widget: impl Into<Element<'a, Msg>>, tip: String) -> Element<'a
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Format a duration given in milliseconds for display.
+///
+/// - Under 1000 ms → `"xxx ms"`
+/// - 1000 ms or more → `"x.xx s"` (two decimal places, standard float rounding)
+fn format_duration(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else {
+        format!("{:.2} s", ms as f64 / 1000.0)
+    }
+}
+
+/// Count the number of non-overlapping occurrences of `needle` in the active
+/// tab's text.  Returns 0 when `needle` is empty or no tab is given.
+fn count_matches(tab: Option<&EditorTab>, needle: &str) -> usize {
+    if needle.is_empty() {
+        return 0;
+    }
+    tab.map(|t| t.content.text().matches(needle).count())
+        .unwrap_or(0)
+}
+
+/// Build the status string shown in the find/replace panel.
+fn count_matches_status(tab: Option<&EditorTab>, needle: &str) -> String {
+    if needle.is_empty() {
+        return String::new();
+    }
+    let n = count_matches(tab, needle);
+    if n == 0 {
+        "Nicht gefunden".to_string()
+    } else {
+        format!("{n} Treffer")
+    }
+}
 
 /// Rebuild `text_editor::Content` from the ring buffer.
 ///
@@ -1293,9 +1790,9 @@ Die Schaltflächen führen den jeweiligen Cargo-Befehl direkt aus:
   Bench            — Benchmarks ausführen (cargo bench)
 
 Jede Schaltfläche zeigt hinter dem Label die erwartete Dauer an
-(est:? vor dem ersten Lauf, danach die zuletzt gemessene Zeit in ms).
+(est:? vor dem ersten Lauf, danach die zuletzt gemessene Zeit).
 Während ein Befehl läuft, zeigt der aktive Button zusätzlich die
-aktuelle Laufzeit in Echtzeit an (jetzt: X ms).
+aktuelle Laufzeit in Echtzeit an (jetzt: X ms oder X.XX s).
 
 ## Neues Projekt
 Geben Sie einen Projektnamen ein und klicken Sie auf \"cargo new\", um ein
@@ -1322,8 +1819,56 @@ Verfügbare Themes:
 
 ## Editor
 Unter \"✏ Editor\" steht ein Texteditor mit Tabs zur Verfügung.
-  - \"+ Neu\"     — Neuen leeren Tab öffnen
-  - \"📂 Öffnen\" — Datei laden (öffnet nativen Dateiauswahl-Dialog)
-  - \"✕\"         — Tab schließen
-  - \"*\"         im Tabtitel zeigt ungespeicherte Änderungen an.
-";
+  - \"+ Neu\"      — Neuen leeren Tab öffnen
+  - \"📂 Öffnen\"  — Datei laden (öffnet nativen Dateiauswahl-Dialog)
+  - \"✕\"          — Tab schließen
+  - \"*\"          im Tabtitel zeigt ungespeicherte Änderungen an.
+  - \"🔍 Suchen\"  — Suchen & Ersetzen-Panel ein-/ausblenden.
+  - Rechtsklick im Editor öffnet ein Kontextmenü mit Kopieren, Ausschneiden,
+    Einfügen, Alles auswählen und Suchen/Ersetzen.
+
+## Suchen & Ersetzen (Editor)
+Das Panel öffnet sich unterhalb der Tab-Leiste:
+  - Suchfeld: Suchtext eingeben (Enter = Nächstes).
+  - Ersetzen-Feld: Ersetzungstext eingeben.
+  - \"▼ Nächstes\" / \"▲ Vorheriges\" — Durch Treffer navigieren.
+  - \"Ersetzen\" — Aktuelles Vorkommen ersetzen.
+  - \"Alle ersetzen\" — Alle Vorkommen auf einmal ersetzen.
+  - Statusanzeige rechts neben den Buttons (Trefferanzahl oder \"Nicht gefunden\").
+
+## Kontextmenü (Rechtsklick)
+  - Im Editor-Textfeld und im Ausgabe-Feld per Rechtsklick öffnen.
+  - Kopieren, Ausschneiden (nur Editor), Einfügen (nur Editor), Alles auswählen.
+  - Im Editor zusätzlich: \"Suchen/Ersetzen…\" öffnet das Find-Replace-Panel.
+  - Schließt sich bei Klick außerhalb des Menüs.
+
+## Zeitanzeige
+  Laufzeiten unter 1 Sekunde werden als \"xxx ms\" angezeigt,
+  ab 1 Sekunde als \"x.xx s\".";
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::format_duration;
+
+    #[test]
+    fn format_duration_below_1000ms() {
+        assert_eq!(format_duration(0), "0 ms");
+        assert_eq!(format_duration(1), "1 ms");
+        assert_eq!(format_duration(999), "999 ms");
+    }
+
+    #[test]
+    fn format_duration_at_boundary() {
+        assert_eq!(format_duration(1000), "1.00 s");
+        assert_eq!(format_duration(1500), "1.50 s");
+        assert_eq!(format_duration(2345), "2.35 s");
+        assert_eq!(format_duration(60000), "60.00 s");
+        // Verify that standard float rounding is applied (1999 ms → 2.00 s after rounding).
+        assert_eq!(format_duration(1999), "2.00 s");
+        assert_eq!(format_duration(1994), "1.99 s");
+    }
+}
