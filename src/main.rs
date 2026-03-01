@@ -22,24 +22,39 @@
 //!
 //! ## Cancellation design
 //! A `tokio::sync::oneshot` channel is created for each run.  The `Sender` half
-//! is kept in `App::stop_tx`; sending `()` on it tells the cargo task to kill
+//! is kept in `App::stop_tx`; sending `()` on it tells the cargo task to stop
 //! the child process and return early.
 //!
 //! ## Stale-message guard
 //! Every run increments `current_job_id`.  `Append` and `Done` messages carry
 //! the job id they were emitted for; messages whose id does not match the
 //! current id are silently discarded.
+//!
+//! ## Tooltip system
+//! Mouse position is tracked via `iced::event::listen_with`. Widgets are
+//! wrapped with [`hover_tip`] which uses `mouse_area` to set / clear a global
+//! `tooltip_text` in the App state.  The tooltip overlay is rendered as the top
+//! layer of an `iced::widget::stack`, positioned live at the cursor.
+//!
+//! ## Persistent settings
+//! See `src/config.rs`.  Settings are written to disk immediately on every
+//! change (file is tiny, so I/O is negligible).
+
+mod config;
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::time::Duration;
 
+use config::{AppTheme, Config};
 use futures::channel::mpsc;
 use futures::FutureExt as _;
 use futures::SinkExt as _;
 use iced::widget::{
-    button, column, container, row, scrollable, text, text_editor, text_input, tooltip,
+    button, column, container, horizontal_space, mouse_area, pick_list, row, scrollable, stack,
+    text, text_editor, text_input, Space,
 };
-use iced::{Element, Length, Subscription, Task};
+use iced::{Color, Element, Length, Subscription, Task};
 use tokio::sync::oneshot;
 
 // ---------------------------------------------------------------------------
@@ -51,8 +66,7 @@ const MAX_LINES: usize = 5000;
 
 /// Notice prepended once per run/session when older lines have been discarded.
 /// The message is intentionally in German to match the application locale.
-const TRIM_NOTICE: &str =
-    "⚠ Hinweis: ältere Ausgabe wurde verworfen – max. 5000 Zeilen";
+const TRIM_NOTICE: &str = "⚠ Hinweis: ältere Ausgabe wurde verworfen – max. 5000 Zeilen";
 
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
@@ -88,12 +102,62 @@ enum View {
 }
 
 // ---------------------------------------------------------------------------
+// Editor tabs
+// ---------------------------------------------------------------------------
+
+/// A single tab in the editor view.
+struct EditorTab {
+    /// Display title (filename or "Untitled-N").
+    title: String,
+    /// Absolute path if the tab was opened from disk.
+    path: Option<PathBuf>,
+    /// Content managed by iced's built-in text editor widget.
+    content: text_editor::Content,
+    /// `true` after any edit action since the last save.
+    dirty: bool,
+}
+
+impl EditorTab {
+    fn new_untitled(index: usize) -> Self {
+        Self {
+            title: format!("Untitled-{}", index + 1),
+            path: None,
+            content: text_editor::Content::new(),
+            dirty: false,
+        }
+    }
+
+    fn from_file(path: PathBuf, file_text: &str) -> Self {
+        let title = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unbekannt".to_string());
+        Self {
+            title,
+            path: Some(path),
+            content: text_editor::Content::with_text(file_text),
+            dirty: false,
+        }
+    }
+
+    /// Tab label, with a `*` suffix when unsaved changes exist.
+    fn display_title(&self) -> String {
+        if self.dirty {
+            format!("{}*", self.title)
+        } else {
+            self.title.clone()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 fn main() -> iced::Result {
     iced::application("Cargo GUI", App::update, App::view)
         .subscription(App::subscription)
+        .theme(|app: &App| app.config.theme.to_iced())
         .run_with(App::new)
 }
 
@@ -104,6 +168,9 @@ fn main() -> iced::Result {
 struct App {
     /// Active navigation view.
     current_view: View,
+
+    // --- Persistent config (loaded at startup, saved on every change) ---
+    config: Config,
 
     // --- Main view state ---
     project_path: String,
@@ -130,37 +197,50 @@ struct App {
     status: String,
 
     // --- Editor view state ---
-    editor_content: text_editor::Content,
+    editor_tabs: Vec<EditorTab>,
+    /// Index of the currently visible tab.
+    active_tab: usize,
+    /// Running counter for generating "Untitled-N" titles.
+    untitled_counter: usize,
 
-    // --- Settings view state ---
-    /// User-defined default project path restored on "Als Start".
-    default_path: String,
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self {
-            current_view: View::Main,
-            project_path: String::new(),
-            cargo_args: "build".to_string(),
-            new_project_name: String::new(),
-            output_lines: VecDeque::new(),
-            output_content: text_editor::Content::new(),
-            output_dirty: false,
-            output_trimmed: false,
-            running: false,
-            current_job_id: 0,
-            stop_tx: None,
-            status: "Bereit".to_string(),
-            editor_content: text_editor::Content::new(),
-            default_path: String::new(),
-        }
-    }
+    // --- Tooltip overlay state ---
+    /// Text to show in the global tooltip, or `None` when hidden.
+    tooltip_text: Option<String>,
+    /// Current mouse cursor X position (in logical pixels).
+    mouse_x: f32,
+    /// Current mouse cursor Y position (in logical pixels).
+    mouse_y: f32,
 }
 
 impl App {
     fn new() -> (Self, Task<Msg>) {
-        (Self::default(), Task::none())
+        let config = Config::load();
+        let project_path = config.default_path.clone();
+        let editor_tabs = vec![EditorTab::new_untitled(0)];
+        (
+            Self {
+                current_view: View::Main,
+                config,
+                project_path,
+                cargo_args: "build".to_string(),
+                new_project_name: String::new(),
+                output_lines: VecDeque::new(),
+                output_content: text_editor::Content::new(),
+                output_dirty: false,
+                output_trimmed: false,
+                running: false,
+                current_job_id: 0,
+                stop_tx: None,
+                status: "Bereit".to_string(),
+                editor_tabs,
+                active_tab: 0,
+                untitled_counter: 1,
+                tooltip_text: None,
+                mouse_x: 0.0,
+                mouse_y: 0.0,
+            },
+            Task::none(),
+        )
     }
 }
 
@@ -180,7 +260,7 @@ enum Msg {
     BrowsePath,
     /// Folder chosen via rfd dialog; `None` means the dialog was cancelled.
     PathPicked(Option<String>),
-    /// Set `project_path` as the new `default_path`.
+    /// Set `project_path` as the new `default_path` and persist.
     SetAsDefault,
     /// Restore `project_path` from `default_path`.
     RestoreDefault,
@@ -198,9 +278,15 @@ enum Msg {
     /// Request cancellation of the running cargo process.
     Stop,
     /// One output line from the cargo process.
-    Append { line: String, job_id: u64 },
+    Append {
+        line: String,
+        job_id: u64,
+    },
     /// The cargo process exited.
-    Done { success: bool, job_id: u64 },
+    Done {
+        success: bool,
+        job_id: u64,
+    },
     /// Clear the output terminal and reset state.
     Clear,
     /// Periodic flush: rebuild `text_editor::Content` from the ring buffer if dirty.
@@ -210,11 +296,31 @@ enum Msg {
 
     // --- Editor view ---
     EditorAction(text_editor::Action),
+    /// Create a new empty "Untitled" tab.
+    TabNew,
+    /// Switch to the tab at the given index.
+    TabSelect(usize),
+    /// Close the tab at the given index.
+    TabClose(usize),
+    /// Open a native file-picker dialog to load a file into the editor.
+    OpenFile,
+    /// File chosen via rfd; `None` means the dialog was cancelled.
+    FilePicked(Option<(PathBuf, String)>),
 
     // --- Settings view ---
     DefaultPathChanged(String),
-    /// Confirm and persist the default path with a status notification.
-    SaveSettings,
+    /// User selected a new theme from the pick-list.
+    ThemeChanged(AppTheme),
+    /// Reset all settings to their default values and persist.
+    ResetSettings,
+
+    // --- Tooltip overlay ---
+    /// Mouse cursor moved to `position`.
+    MouseMoved(iced::Point),
+    /// A widget has been hovered — show the given tooltip text.
+    TooltipShow(String),
+    /// The cursor left a widget — hide the tooltip.
+    TooltipHide,
 
     // --- App ---
     Quit,
@@ -263,14 +369,15 @@ impl App {
             }
 
             Msg::SetAsDefault => {
-                self.default_path = self.project_path.clone();
+                self.config.default_path = self.project_path.clone();
+                self.config.save();
                 self.status = "Startpfad gesetzt".to_string();
                 Task::none()
             }
 
             Msg::RestoreDefault => {
-                if !self.default_path.is_empty() {
-                    self.project_path = self.default_path.clone();
+                if !self.config.default_path.is_empty() {
+                    self.project_path = self.config.default_path.clone();
                 }
                 Task::none()
             }
@@ -380,18 +487,108 @@ impl App {
 
             // --- Editor ---
             Msg::EditorAction(action) => {
-                self.editor_content.perform(action);
+                if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                    if matches!(action, text_editor::Action::Edit(_)) {
+                        tab.dirty = true;
+                    }
+                    tab.content.perform(action);
+                }
+                Task::none()
+            }
+
+            Msg::TabNew => {
+                self.editor_tabs
+                    .push(EditorTab::new_untitled(self.untitled_counter));
+                self.untitled_counter += 1;
+                self.active_tab = self.editor_tabs.len() - 1;
+                Task::none()
+            }
+
+            Msg::TabSelect(idx) => {
+                if idx < self.editor_tabs.len() {
+                    self.active_tab = idx;
+                }
+                Task::none()
+            }
+
+            Msg::TabClose(idx) => {
+                if self.editor_tabs.len() <= 1 {
+                    // Keep at least one tab; just reset its content.
+                    if let Some(tab) = self.editor_tabs.get_mut(0) {
+                        *tab = EditorTab::new_untitled(self.untitled_counter);
+                        self.untitled_counter += 1;
+                    }
+                    return Task::none();
+                }
+                self.editor_tabs.remove(idx);
+                if self.active_tab >= self.editor_tabs.len() {
+                    self.active_tab = self.editor_tabs.len() - 1;
+                }
+                Task::none()
+            }
+
+            Msg::OpenFile => Task::perform(
+                async {
+                    let handle = rfd::AsyncFileDialog::new().pick_file().await?;
+                    let path = handle.path().to_path_buf();
+                    let contents = tokio::fs::read_to_string(&path).await.ok()?;
+                    Some((path, contents))
+                },
+                Msg::FilePicked,
+            ),
+
+            Msg::FilePicked(maybe) => {
+                if let Some((path, file_text)) = maybe {
+                    // Switch to existing tab if the file is already open.
+                    if let Some(idx) = self
+                        .editor_tabs
+                        .iter()
+                        .position(|t| t.path.as_deref() == Some(&path))
+                    {
+                        self.active_tab = idx;
+                    } else {
+                        self.editor_tabs
+                            .push(EditorTab::from_file(path, &file_text));
+                        self.active_tab = self.editor_tabs.len() - 1;
+                    }
+                }
                 Task::none()
             }
 
             // --- Settings ---
             Msg::DefaultPathChanged(p) => {
-                self.default_path = p;
+                self.config.default_path = p;
+                self.config.save();
                 Task::none()
             }
 
-            Msg::SaveSettings => {
-                self.status = "Einstellungen gespeichert ✓".to_string();
+            Msg::ThemeChanged(theme) => {
+                self.config.theme = theme;
+                self.config.save();
+                Task::none()
+            }
+
+            Msg::ResetSettings => {
+                self.config = Config::default();
+                self.config.save();
+                self.status = "Einstellungen zurückgesetzt ✓".to_string();
+                Task::none()
+            }
+
+            // --- Tooltip overlay ---
+            Msg::MouseMoved(pt) => {
+                self.mouse_x = pt.x;
+                self.mouse_y = pt.y;
+                Task::none()
+            }
+
+            Msg::TooltipShow(t) => {
+                self.tooltip_text = Some(t);
+                Task::none()
+            }
+
+            Msg::TooltipHide => {
+                self.tooltip_text = None;
                 Task::none()
             }
 
@@ -417,7 +614,43 @@ impl App {
         let topbar = self.view_topbar();
         let footer = self.view_footer();
 
-        column![topbar, body, footer].into()
+        let main_col: Element<'_, Msg> = column![topbar, body, footer].into();
+
+        // ---- Tooltip overlay ----
+        if let Some(tip) = &self.tooltip_text {
+            let tip_box: Element<'_, Msg> = container(text(tip.as_str()).size(12))
+                .style(|_theme| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(Color::from_rgba(
+                        0.12, 0.12, 0.12, 0.93,
+                    ))),
+                    border: iced::Border {
+                        color: Color::BLACK,
+                        width: 1.5,
+                        radius: 4.0.into(),
+                    },
+                    text_color: Some(Color::WHITE),
+                    shadow: iced::Shadow::default(),
+                })
+                .padding([4, 8])
+                .into();
+
+            // Position the tooltip above and horizontally centred over the
+            // cursor. We subtract 60 px to approximate centering since the
+            // actual render width is unknown at layout time.
+            let tip_x = (self.mouse_x - 60.0).max(0.0);
+            let tip_y = (self.mouse_y - 34.0).max(0.0);
+
+            let tip_layer: Element<'_, Msg> = column![
+                Space::with_height(Length::Fixed(tip_y)),
+                row![Space::with_width(Length::Fixed(tip_x)), tip_box,],
+            ]
+            .width(Length::Fill)
+            .into();
+
+            stack![main_col, tip_layer].into()
+        } else {
+            main_col
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -425,11 +658,7 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_topbar(&self) -> Element<'_, Msg> {
-        let menu_btn = tooltip(
-            button("☰").padding([4, 10]),
-            "Menü",
-            tooltip::Position::Bottom,
-        );
+        let menu_btn = hover_tip(button("☰").padding([4, 10]), "Menü".to_string());
 
         let title = text("Cargo GUI").size(20);
 
@@ -449,36 +678,30 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_footer(&self) -> Element<'_, Msg> {
-        let settings_btn = tooltip(
+        let settings_btn = hover_tip(
             button("⚙ Einstellungen")
                 .on_press(Msg::NavigateTo(View::Settings))
                 .padding([5, 10]),
-            "Einstellungen öffnen",
-            tooltip::Position::Top,
+            "Einstellungen öffnen".to_string(),
         );
 
-        let editor_btn = tooltip(
+        let editor_btn = hover_tip(
             button("✏ Editor")
                 .on_press(Msg::NavigateTo(View::Editor))
                 .padding([5, 10]),
-            "Datei-Editor öffnen",
-            tooltip::Position::Top,
+            "Datei-Editor öffnen".to_string(),
         );
 
-        let help_btn = tooltip(
+        let help_btn = hover_tip(
             button("? Hilfe")
                 .on_press(Msg::NavigateTo(View::Help))
                 .padding([5, 10]),
-            "Bedienungsanleitung öffnen",
-            tooltip::Position::Top,
+            "Bedienungsanleitung öffnen".to_string(),
         );
 
-        let quit_btn = tooltip(
-            button("✕ Beenden")
-                .on_press(Msg::Quit)
-                .padding([5, 10]),
-            "Anwendung beenden",
-            tooltip::Position::Top,
+        let quit_btn = hover_tip(
+            button("✕ Beenden").on_press(Msg::Quit).padding([5, 10]),
+            "Anwendung beenden".to_string(),
         );
 
         let status_text = text(format!("Status: {}", self.status)).size(13);
@@ -504,20 +727,18 @@ impl App {
             .on_input(Msg::PathChanged)
             .padding(5);
 
-        let browse_btn = tooltip(
+        let browse_btn = hover_tip(
             button("📂 Durchsuchen")
                 .on_press(Msg::BrowsePath)
                 .padding([5, 10]),
-            "Projektordner auswählen",
-            tooltip::Position::Bottom,
+            "Projektordner auswählen".to_string(),
         );
 
-        let set_default_btn = tooltip(
+        let set_default_btn = hover_tip(
             button("Als Start")
                 .on_press(Msg::SetAsDefault)
                 .padding([5, 10]),
-            "Diesen Pfad als Standardpfad speichern",
-            tooltip::Position::Bottom,
+            "Diesen Pfad als Standardpfad speichern".to_string(),
         );
 
         let path_row = row![
@@ -536,20 +757,18 @@ impl App {
             .on_submit(Msg::Run)
             .padding(5);
 
-        let run_btn = tooltip(
+        let run_btn = hover_tip(
             button("▶ Ausführen")
                 .on_press_maybe((!self.running).then_some(Msg::Run))
                 .padding([5, 10]),
-            "Cargo-Befehl ausführen",
-            tooltip::Position::Bottom,
+            "Cargo-Befehl ausführen".to_string(),
         );
 
-        let stop_btn = tooltip(
+        let stop_btn = hover_tip(
             button("■ Stop")
                 .on_press_maybe(self.running.then_some(Msg::Stop))
                 .padding([5, 10]),
-            "Laufenden Prozess abbrechen",
-            tooltip::Position::Bottom,
+            "Laufenden Prozess abbrechen".to_string(),
         );
 
         let args_row = row![
@@ -568,15 +787,14 @@ impl App {
             .on_submit(Msg::RunCargoNew)
             .padding(5);
 
-        let cargo_new_btn = tooltip(
+        let cargo_new_btn = hover_tip(
             button("cargo new")
                 .on_press_maybe(
                     (!self.running && !self.new_project_name.trim().is_empty())
                         .then_some(Msg::RunCargoNew),
                 )
                 .padding([5, 10]),
-            "Neues Cargo-Projekt anlegen",
-            tooltip::Position::Bottom,
+            "Neues Cargo-Projekt anlegen".to_string(),
         );
 
         let new_row = row![
@@ -594,17 +812,14 @@ impl App {
                 .iter()
                 .map(|(label, cmd)| {
                     let cmd_str = cmd.to_string();
-                    tooltip(
+                    let tip = format!("cargo {cmd}");
+                    hover_tip(
                         button(*label)
-                            .on_press_maybe(
-                                (!self.running).then_some(Msg::RunCommand(cmd_str)),
-                            )
+                            .on_press_maybe((!self.running).then_some(Msg::RunCommand(cmd_str)))
                             .width(110)
                             .padding([5, 8]),
-                        text(format!("cargo {cmd}")),
-                        tooltip::Position::Right,
+                        tip,
                     )
-                    .into()
                 })
                 .collect::<Vec<_>>(),
         )
@@ -615,17 +830,14 @@ impl App {
                 .iter()
                 .map(|(label, cmd)| {
                     let cmd_str = cmd.to_string();
-                    tooltip(
+                    let tip = format!("cargo {cmd}");
+                    hover_tip(
                         button(*label)
-                            .on_press_maybe(
-                                (!self.running).then_some(Msg::RunCommand(cmd_str)),
-                            )
+                            .on_press_maybe((!self.running).then_some(Msg::RunCommand(cmd_str)))
                             .width(110)
                             .padding([5, 8]),
-                        text(format!("cargo {cmd}")),
-                        tooltip::Position::Right,
+                        tip,
                     )
-                    .into()
                 })
                 .collect::<Vec<_>>(),
         )
@@ -633,36 +845,27 @@ impl App {
 
         let commands_grid = row![left_col, right_col].spacing(8);
 
-        let commands_section = column![
-            text("Cargo Befehle").size(15),
-            commands_grid,
-        ]
-        .spacing(6)
-        .padding([4, 8]);
+        let commands_section = column![text("Cargo Befehle").size(15), commands_grid,]
+            .spacing(6)
+            .padding([4, 8]);
 
         // -- Output section --
-        let clear_btn = tooltip(
+        let clear_btn = hover_tip(
             button("Ausgabe löschen")
                 .on_press(Msg::Clear)
                 .padding([5, 10]),
-            "Ausgabe leeren und Status zurücksetzen",
-            tooltip::Position::Bottom,
+            "Ausgabe leeren und Status zurücksetzen".to_string(),
         );
 
-        let output_header = row![
-            text("Ausgabe").size(15),
-            clear_btn,
-        ]
-        .spacing(8)
-        .align_y(iced::Alignment::Center);
+        let output_header = row![text("Ausgabe").size(15), clear_btn,]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
 
         let output = text_editor(&self.output_content)
             .on_action(Msg::OutputAction)
             .height(Length::Fill);
 
-        let output_section = column![output_header, output]
-            .spacing(4)
-            .padding([4, 8]);
+        let output_section = column![output_header, output].spacing(4).padding([4, 8]);
 
         // -- Layout: left side has inputs + commands; right side is larger output --
         let left_panel = scrollable(
@@ -688,39 +891,59 @@ impl App {
             .on_press(Msg::NavigateTo(View::Main))
             .padding([5, 10]);
 
-        let default_path_input =
-            text_input("Standard-Projektpfad…", &self.default_path)
-                .on_input(Msg::DefaultPathChanged)
-                .padding(5);
+        // -- Default path row --
+        let default_path_input = text_input("Standard-Projektpfad…", &self.config.default_path)
+            .on_input(Msg::DefaultPathChanged)
+            .padding(5);
 
-        let save_btn = tooltip(
-            button("Speichern")
-                .on_press(Msg::SaveSettings)
+        let restore_btn = hover_tip(
+            button("Standard-Pfad laden")
+                .on_press(Msg::RestoreDefault)
                 .padding([5, 10]),
-            "Einstellungen übernehmen",
-            tooltip::Position::Bottom,
+            "Standard-Pfad in das Projektverzeichnis-Feld laden".to_string(),
         );
 
         let default_path_row = row![
             text("Standard-Pfad:").size(13).width(160),
             default_path_input,
-            save_btn,
+            restore_btn,
         ]
         .spacing(6)
         .align_y(iced::Alignment::Center);
 
-        let restore_btn = tooltip(
-            button("Standard-Pfad laden")
-                .on_press(Msg::RestoreDefault)
+        // -- Theme row --
+        let theme_picker = pick_list(
+            AppTheme::ALL,
+            Some(self.config.theme.clone()),
+            Msg::ThemeChanged,
+        )
+        .padding([5, 10]);
+
+        let theme_row = row![text("Theme:").size(13).width(160), theme_picker,]
+            .spacing(6)
+            .align_y(iced::Alignment::Center);
+
+        // -- Reset button --
+        let reset_btn = hover_tip(
+            button("Standard zurück")
+                .on_press(Msg::ResetSettings)
                 .padding([5, 10]),
-            "Standard-Pfad in das Projektverzeichnis-Feld laden",
-            tooltip::Position::Bottom,
+            "Alle Einstellungen auf Standardwerte zurücksetzen".to_string(),
         );
+
+        // Config file path hint
+        let config_hint = if let Some(p) = Config::config_path() {
+            format!("Konfigurationsdatei: {}", p.display())
+        } else {
+            "Konfigurationsdatei: (kein Pfad verfügbar)".to_string()
+        };
 
         column![
             row![back_btn, text("Einstellungen").size(18)].spacing(10),
             default_path_row,
-            restore_btn,
+            theme_row,
+            reset_btn,
+            text(config_hint).size(11),
         ]
         .spacing(12)
         .padding(16)
@@ -737,13 +960,72 @@ impl App {
             .on_press(Msg::NavigateTo(View::Main))
             .padding([5, 10]);
 
-        let editor = text_editor(&self.editor_content)
-            .on_action(Msg::EditorAction)
-            .height(Length::Fill);
+        let new_tab_btn = hover_tip(
+            button("+ Neu").on_press(Msg::TabNew).padding([5, 10]),
+            "Neuen leeren Tab öffnen".to_string(),
+        );
+
+        let open_btn = hover_tip(
+            button("📂 Öffnen").on_press(Msg::OpenFile).padding([5, 10]),
+            "Datei öffnen".to_string(),
+        );
+
+        // -- Tab bar --
+        let tab_bar = row(self
+            .editor_tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| {
+                let is_active = i == self.active_tab;
+                let label = tab.display_title();
+
+                let tab_btn = button(text(label).size(13))
+                    .on_press(Msg::TabSelect(i))
+                    .padding([4, 8])
+                    .style(if is_active {
+                        button::primary
+                    } else {
+                        button::secondary
+                    });
+
+                let close_btn = button(text("✕").size(11))
+                    .on_press(Msg::TabClose(i))
+                    .padding([4, 6])
+                    .style(button::danger);
+
+                row![tab_btn, close_btn]
+                    .spacing(2)
+                    .align_y(iced::Alignment::Center)
+                    .into()
+            })
+            .collect::<Vec<_>>())
+        .spacing(4);
+
+        // -- Active editor --
+        let editor_widget: Element<'_, Msg> =
+            if let Some(tab) = self.editor_tabs.get(self.active_tab) {
+                text_editor(&tab.content)
+                    .on_action(Msg::EditorAction)
+                    .height(Length::Fill)
+                    .into()
+            } else {
+                text("Kein Tab ausgewählt").into()
+            };
 
         column![
-            row![back_btn, text("Editor").size(18)].spacing(10),
-            editor,
+            row![
+                back_btn,
+                text("Editor").size(18),
+                horizontal_space(),
+                new_tab_btn,
+                open_btn
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+            scrollable(tab_bar).direction(scrollable::Direction::Horizontal(
+                scrollable::Scrollbar::default(),
+            )),
+            editor_widget,
         ]
         .spacing(8)
         .padding(16)
@@ -779,11 +1061,37 @@ impl App {
 
 impl App {
     fn subscription(&self) -> Subscription<Msg> {
-        // Periodic flush: rebuild the terminal display from the ring buffer
-        // every 100 ms.  New lines only set `output_dirty`; this tick does
-        // the (potentially expensive) `Content` rebuild at most 10 times/s.
-        iced::time::every(Duration::from_millis(100)).map(|_| Msg::FlushOutput)
+        // Periodic flush of the output ring buffer (every 100 ms).
+        let flush = iced::time::every(Duration::from_millis(100)).map(|_| Msg::FlushOutput);
+
+        // Track the global mouse position so the tooltip overlay can follow
+        // the cursor.
+        let mouse = iced::event::listen_with(|event, _status, _id| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Some(Msg::MouseMoved(position))
+            }
+            _ => None,
+        });
+
+        Subscription::batch([flush, mouse])
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tooltip helper
+// ---------------------------------------------------------------------------
+
+/// Wrap `widget` with a [`mouse_area`] that shows/hides the global tooltip
+/// overlay when the cursor enters or leaves the widget bounds.
+///
+/// On hover the application-wide `tooltip_text` is set; when the cursor
+/// leaves it is cleared.  The actual rendering happens in `App::view` via a
+/// [`stack`] layer positioned at the current mouse coordinates.
+fn hover_tip<'a>(widget: impl Into<Element<'a, Msg>>, tip: String) -> Element<'a, Msg> {
+    mouse_area(widget.into())
+        .on_enter(Msg::TooltipShow(tip))
+        .on_exit(Msg::TooltipHide)
+        .into()
 }
 
 // ---------------------------------------------------------------------------
@@ -813,12 +1121,7 @@ fn flush_output(app: &mut App) {
 ///
 /// `stop_rx`: receiving `()` kills the child process and sends
 /// `Msg::Done { success: false, … }`.
-fn run_cargo(
-    path: String,
-    args: String,
-    job_id: u64,
-    stop_rx: oneshot::Receiver<()>,
-) -> Task<Msg> {
+fn run_cargo(path: String, args: String, job_id: u64, stop_rx: oneshot::Receiver<()>) -> Task<Msg> {
     use tokio::io::{AsyncBufReadExt, BufReader as AsyncBufReader};
     use tokio::process::Command;
 
@@ -826,7 +1129,11 @@ fn run_cargo(
 
     tokio::spawn(async move {
         let arg_parts: Vec<&str> = args.split_whitespace().collect();
-        let working_dir = if path.is_empty() { ".".to_string() } else { path };
+        let working_dir = if path.is_empty() {
+            ".".to_string()
+        } else {
+            path
+        };
 
         let mut child = match Command::new("cargo")
             .args(&arg_parts)
@@ -844,7 +1151,12 @@ fn run_cargo(
                         job_id,
                     })
                     .await;
-                let _ = tx.send(Msg::Done { success: false, job_id }).await;
+                let _ = tx
+                    .send(Msg::Done {
+                        success: false,
+                        job_id,
+                    })
+                    .await;
                 return;
             }
         };
@@ -951,9 +1263,21 @@ selektieren und kopieren. Mit \"Ausgabe löschen\" wird die Ausgabe zurückgeset
 Während ein Cargo-Prozess läuft, können Sie ihn mit \"■ Stop\" abbrechen.
 
 ## Einstellungen
-Unter \"⚙ Einstellungen\" können Sie den Standard-Projektpfad festlegen.
+Unter \"⚙ Einstellungen\" können Sie den Standard-Projektpfad festlegen,
+das Theme auswählen und Einstellungen zurücksetzen.
+Einstellungen werden sofort automatisch gespeichert.
+
+Verfügbare Themes:
+  Hell (Light) · Dunkel (Dark) · Dracula · Nord · Solarized Light/Dark
+  Gruvbox Light/Dark · Catppuccin Latte/Frappé/Macchiato/Mocha
+  Tokyo Night · Tokyo Night Storm · Tokyo Night Light
+  Kanagawa Wave · Kanagawa Dragon · Kanagawa Lotus
+  Moonfly · Nightfly · Oxocarbon
 
 ## Editor
-Unter \"✏ Editor\" steht ein einfacher Texteditor zur Verfügung.
+Unter \"✏ Editor\" steht ein Texteditor mit Tabs zur Verfügung.
+  - \"+ Neu\"     — Neuen leeren Tab öffnen
+  - \"📂 Öffnen\" — Datei laden (öffnet nativen Dateiauswahl-Dialog)
+  - \"✕\"         — Tab schließen
+  - \"*\"         im Tabtitel zeigt ungespeicherte Änderungen an.
 ";
-
