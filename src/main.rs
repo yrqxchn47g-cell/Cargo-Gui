@@ -87,6 +87,12 @@ const FIND_OTHER_COLOR: Color = Color { r: 1.0, g: 0.88, b: 0.0, a: 0.13 };
 /// Background colour for the current find-match highlight band (strong orange-yellow).
 const FIND_CURRENT_COLOR: Color = Color { r: 1.0, g: 0.65, b: 0.0, a: 0.40 };
 
+/// Test highlight color: green.
+const FIND_TEST_GREEN_COLOR: Color = Color { r: 0.0, g: 1.0, b: 0.5, a: 0.40 };
+
+/// Test highlight color: red.
+const FIND_TEST_RED_COLOR: Color = Color { r: 1.0, g: 0.2, b: 0.2, a: 0.40 };
+
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
     ("Build", "build"),
@@ -277,6 +283,8 @@ struct App {
     // --- Editor line highlight ---
     /// 0-based index of the editor line to highlight (current find match).
     editor_highlight_line: Option<usize>,
+    /// Color used to highlight the current find match in the editor.
+    find_test_color: Color,
 
     // --- Output find panel state ---
     /// Whether the output-specific find panel is visible.
@@ -335,6 +343,7 @@ impl App {
                 find_all_match_lines: Vec::new(),
                 context_menu: None,
                 editor_highlight_line: None,
+                find_test_color: FIND_CURRENT_COLOR,
                 output_find_open: false,
                 output_find_text: String::new(),
                 output_find_status: String::new(),
@@ -479,6 +488,10 @@ enum Msg {
 
     // --- App ---
     Quit,
+
+    // --- Find highlight color ---
+    /// Change the highlight color of the current find match in the editor.
+    SetFindTestColor(Color),
 }
 
 // ---------------------------------------------------------------------------
@@ -1187,6 +1200,12 @@ impl App {
 
             // --- App ---
             Msg::Quit => iced::exit(),
+
+            // --- Find highlight color ---
+            Msg::SetFindTestColor(c) => {
+                self.find_test_color = c;
+                Task::none()
+            }
         }
     }
 }
@@ -1855,6 +1874,7 @@ impl App {
                 let highlight = make_multi_highlight_layer(
                     &self.find_all_match_lines,
                     self.find_current_match,
+                    self.find_test_color,
                 );
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
@@ -1869,6 +1889,20 @@ impl App {
                 text("Kein Tab ausgewählt").into()
             };
 
+        let color_btn = |label: &str, color: Color| {
+            button(text(label.to_string()).size(11))
+                .on_press(Msg::SetFindTestColor(color))
+                .padding([2, 6])
+        };
+        let color_row = row![
+            text("Highlight-Farbe:").size(11),
+            color_btn("Gelb", FIND_CURRENT_COLOR),
+            color_btn("Grün", FIND_TEST_GREEN_COLOR),
+            color_btn("Rot",  FIND_TEST_RED_COLOR),
+        ]
+        .spacing(4)
+        .align_y(iced::Alignment::Center);
+
         let mut col = column![
             row![
                 back_btn,
@@ -1880,6 +1914,7 @@ impl App {
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
+            color_row,
             scrollable(tab_bar).direction(scrollable::Direction::Horizontal(
                 scrollable::Scrollbar::default(),
             )),
@@ -2208,7 +2243,7 @@ fn collect_all_match_lines(text: &str, needle: &str) -> Vec<usize> {
 ///
 /// If `current_match >= all_lines.len()` no line receives the stronger
 /// highlight; this is safe (no panic) and indicates there is no active match.
-fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize) -> Element<'a, Msg> {
+fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize, current_color: Color) -> Element<'a, Msg> {
     if all_lines.is_empty() {
         return Space::new(Length::Fill, Length::Fill).into();
     }
@@ -2218,7 +2253,7 @@ fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize) -> 
     layers.push(Space::new(Length::Fill, Length::Fill).into());
 
     for (i, &line) in all_lines.iter().enumerate() {
-        let color = if i == current_match { FIND_CURRENT_COLOR } else { FIND_OTHER_COLOR };
+        let color = if i == current_match { current_color } else { FIND_OTHER_COLOR };
         let offset = line as f32 * LINE_HEIGHT;
         let band: Element<'a, Msg> = column![
             Space::with_height(Length::Fixed(offset)),
