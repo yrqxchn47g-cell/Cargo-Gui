@@ -75,6 +75,12 @@ const TOOLTIP_OFFSET_X: f32 = 60.0;
 /// Vertical offset that places the tooltip above the cursor.
 const TOOLTIP_OFFSET_Y: f32 = 34.0;
 
+/// Width of the line-number gutter rendered left of the text editors.
+const GUTTER_WIDTH: f32 = 48.0;
+
+/// Virtual line height (px) used for the find-match highlight overlay.
+const LINE_HEIGHT: f32 = 20.0;
+
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
     ("Build", "build"),
@@ -258,6 +264,22 @@ struct App {
     /// Non-None when a context menu is currently visible.
     context_menu: Option<ContextMenuState>,
 
+    // --- Editor line highlight ---
+    /// 0-based index of the editor line to highlight (current find match).
+    editor_highlight_line: Option<usize>,
+
+    // --- Output find panel state ---
+    /// Whether the output-specific find panel is visible.
+    output_find_open: bool,
+    /// Current search string in the output find panel.
+    output_find_text: String,
+    /// Status message for the output find panel.
+    output_find_status: String,
+    /// 0-based index of the match navigated to in the output.
+    output_find_current_match: usize,
+    /// 0-based index of the output line to highlight (current output find match).
+    output_highlight_line: Option<usize>,
+
     // --- Tooltip overlay state ---
     /// Text to show in the global tooltip, or `None` when hidden.
     tooltip_text: Option<String>,
@@ -300,6 +322,12 @@ impl App {
                 find_status: String::new(),
                 find_current_match: 0,
                 context_menu: None,
+                editor_highlight_line: None,
+                output_find_open: false,
+                output_find_text: String::new(),
+                output_find_status: String::new(),
+                output_find_current_match: 0,
+                output_highlight_line: None,
                 tooltip_text: None,
                 mouse_x: 0.0,
                 mouse_y: 0.0,
@@ -387,6 +415,16 @@ enum Msg {
     ReplaceOne,
     /// Replace every occurrence in the active tab.
     ReplaceAll,
+
+    // --- Output find panel ---
+    /// Toggle the output-specific find panel open or closed.
+    ToggleOutputFind,
+    /// Output find text field changed.
+    OutputFindTextChanged(String),
+    /// Jump to the next match in the output.
+    OutputFindNext,
+    /// Jump to the previous match in the output.
+    OutputFindPrev,
 
     // --- Context menu ---
     /// Open the context menu at the current mouse position for `kind`.
@@ -544,6 +582,10 @@ impl App {
                     self.output_trimmed = true;
                 }
                 self.output_dirty = true;
+                // New output invalidates any existing output highlight and find position.
+                self.output_highlight_line = None;
+                self.output_find_status.clear();
+                self.output_find_current_match = 0;
                 Task::none()
             }
 
@@ -574,6 +616,7 @@ impl App {
                 self.output_dirty = false;
                 self.output_trimmed = false;
                 self.status = "Bereit".to_string();
+                self.output_highlight_line = None;
                 Task::none()
             }
 
@@ -618,6 +661,8 @@ impl App {
             Msg::TabSelect(idx) => {
                 if idx < self.editor_tabs.len() {
                     self.active_tab = idx;
+                    self.editor_highlight_line = None;
+                    self.find_current_match = 0;
                 }
                 Task::none()
             }
@@ -671,6 +716,7 @@ impl App {
                 self.find_replace_open = !self.find_replace_open;
                 if !self.find_replace_open {
                     self.find_status.clear();
+                    self.editor_highlight_line = None;
                 }
                 Task::none()
             }
@@ -678,20 +724,23 @@ impl App {
             Msg::FindTextChanged(s) => {
                 self.find_text = s;
                 self.find_current_match = 0;
-                self.find_status = count_matches_status(
-                    self.editor_tabs.get(self.active_tab),
-                    &self.find_text,
-                );
-                // Immediately jump to and select the first occurrence so the
-                // user can see it while still typing.
                 let total = count_matches(
                     self.editor_tabs.get(self.active_tab),
                     &self.find_text,
                 );
-                if total > 0 {
-                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
-                        apply_find_selection(&mut tab.content, &self.find_text, 0);
-                    }
+                if total == 0 {
+                    self.find_status = count_matches_status(
+                        self.editor_tabs.get(self.active_tab),
+                        &self.find_text,
+                    );
+                    self.editor_highlight_line = None;
+                } else if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                    let pos = apply_find_selection(&mut tab.content, &self.find_text, 0);
+                    self.editor_highlight_line = pos.map(|(line, _)| line);
+                    self.find_status = match pos {
+                        Some((line, _)) => format!("1/{total} — Zeile {}", line + 1),
+                        None => format!("1/{total}"),
+                    };
                 }
                 Task::none()
             }
@@ -711,17 +760,24 @@ impl App {
                 );
                 if total == 0 {
                     self.find_status = "Nicht gefunden".to_string();
+                    self.editor_highlight_line = None;
                 } else {
                     self.find_current_match =
                         (self.find_current_match + 1) % total;
-                    self.find_status =
-                        format!("{}/{}", self.find_current_match + 1, total);
                     if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
-                        apply_find_selection(
+                        let pos = apply_find_selection(
                             &mut tab.content,
                             &self.find_text,
                             self.find_current_match,
                         );
+                        self.editor_highlight_line = pos.map(|(line, _)| line);
+                        self.find_status = match pos {
+                            Some((line, _)) => format!(
+                                "{}/{} — Zeile {}",
+                                self.find_current_match + 1, total, line + 1
+                            ),
+                            None => format!("{}/{}", self.find_current_match + 1, total),
+                        };
                     }
                 }
                 Task::none()
@@ -737,18 +793,25 @@ impl App {
                 );
                 if total == 0 {
                     self.find_status = "Nicht gefunden".to_string();
+                    self.editor_highlight_line = None;
                 } else {
                     // Wrap backwards: when at index 0, jump to the last match.
                     self.find_current_match =
                         self.find_current_match.checked_sub(1).unwrap_or(total - 1);
-                    self.find_status =
-                        format!("{}/{}", self.find_current_match + 1, total);
                     if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
-                        apply_find_selection(
+                        let pos = apply_find_selection(
                             &mut tab.content,
                             &self.find_text,
                             self.find_current_match,
                         );
+                        self.editor_highlight_line = pos.map(|(line, _)| line);
+                        self.find_status = match pos {
+                            Some((line, _)) => format!(
+                                "{}/{} — Zeile {}",
+                                self.find_current_match + 1, total, line + 1
+                            ),
+                            None => format!("{}/{}", self.find_current_match + 1, total),
+                        };
                     }
                 }
                 Task::none()
@@ -808,6 +871,118 @@ impl App {
                         self.find_current_match = 0;
                         self.find_status = format!("{count} ersetzt");
                     }
+                }
+                Task::none()
+            }
+
+            // --- Output find panel ---
+            Msg::ToggleOutputFind => {
+                self.output_find_open = !self.output_find_open;
+                if !self.output_find_open {
+                    self.output_find_status.clear();
+                    self.output_highlight_line = None;
+                }
+                self.context_menu = None;
+                Task::none()
+            }
+
+            Msg::OutputFindTextChanged(s) => {
+                self.output_find_text = s;
+                self.output_find_current_match = 0;
+                let total = {
+                    let t = self.output_content.text();
+                    if self.output_find_text.is_empty() {
+                        0
+                    } else {
+                        t.matches(self.output_find_text.as_str()).count()
+                    }
+                };
+                if total == 0 {
+                    self.output_find_status = if self.output_find_text.is_empty() {
+                        String::new()
+                    } else {
+                        "Nicht gefunden".to_string()
+                    };
+                    self.output_highlight_line = None;
+                } else {
+                    let pos = apply_find_selection(
+                        &mut self.output_content,
+                        &self.output_find_text,
+                        0,
+                    );
+                    self.output_highlight_line = pos.map(|(line, _)| line);
+                    self.output_find_status = match pos {
+                        Some((line, _)) => format!("1/{total} — Zeile {}", line + 1),
+                        None => format!("1/{total}"),
+                    };
+                }
+                Task::none()
+            }
+
+            Msg::OutputFindNext => {
+                if self.output_find_text.is_empty() {
+                    return Task::none();
+                }
+                let total = {
+                    let t = self.output_content.text();
+                    t.matches(self.output_find_text.as_str()).count()
+                };
+                if total == 0 {
+                    self.output_find_status = "Nicht gefunden".to_string();
+                    self.output_highlight_line = None;
+                } else {
+                    self.output_find_current_match =
+                        (self.output_find_current_match + 1) % total;
+                    let pos = apply_find_selection(
+                        &mut self.output_content,
+                        &self.output_find_text,
+                        self.output_find_current_match,
+                    );
+                    self.output_highlight_line = pos.map(|(line, _)| line);
+                    self.output_find_status = match pos {
+                        Some((line, _)) => format!(
+                            "{}/{} — Zeile {}",
+                            self.output_find_current_match + 1, total, line + 1
+                        ),
+                        None => format!(
+                            "{}/{}",
+                            self.output_find_current_match + 1, total
+                        ),
+                    };
+                }
+                Task::none()
+            }
+
+            Msg::OutputFindPrev => {
+                if self.output_find_text.is_empty() {
+                    return Task::none();
+                }
+                let total = {
+                    let t = self.output_content.text();
+                    t.matches(self.output_find_text.as_str()).count()
+                };
+                if total == 0 {
+                    self.output_find_status = "Nicht gefunden".to_string();
+                    self.output_highlight_line = None;
+                } else {
+                    self.output_find_current_match =
+                        self.output_find_current_match.checked_sub(1).unwrap_or(total - 1);
+                    let pos = apply_find_selection(
+                        &mut self.output_content,
+                        &self.output_find_text,
+                        self.output_find_current_match,
+                    );
+                    self.output_highlight_line = pos.map(|(line, _)| line);
+                    self.output_find_status = match pos {
+                        Some((line, _)) => format!(
+                            "{}/{} — Zeile {}",
+                            self.output_find_current_match + 1, total, line + 1
+                        ),
+                        None => format!(
+                            "{}/{}",
+                            self.output_find_current_match + 1, total
+                        ),
+                    };
                 }
                 Task::none()
             }
@@ -995,6 +1170,12 @@ impl App {
                     .width(Length::Fill)
                     .padding([4, 10]);
                 menu_col = menu_col.push(cut_btn).push(paste_btn).push(find_btn);
+            } else {
+                let output_find_btn = button("🔍 Suchen…")
+                    .on_press(Msg::ToggleOutputFind)
+                    .width(Length::Fill)
+                    .padding([4, 10]);
+                menu_col = menu_col.push(output_find_btn);
             }
 
             let menu_box: Element<'_, Msg> = container(menu_col)
@@ -1276,14 +1457,64 @@ impl App {
             .spacing(8)
             .align_y(iced::Alignment::Center);
 
+        let output_te = text_editor(&self.output_content)
+            .on_action(Msg::OutputAction)
+            .height(Length::Fill);
+        let output_line_count = self.output_content.text().lines().count().max(1);
+        let output_gutter = make_gutter(output_line_count);
+        let output_hl = make_highlight_layer(self.output_highlight_line);
+        let output_stack: Element<'_, Msg> = stack![output_hl, output_te].into();
         let output = mouse_area(
-            text_editor(&self.output_content)
-                .on_action(Msg::OutputAction)
-                .height(Length::Fill),
+            row![output_gutter, output_stack].height(Length::Fill),
         )
         .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Output));
 
-        let output_section = column![output_header, output].spacing(4).padding([4, 8]);
+        // -- Output find panel --
+        let output_find_panel: Option<Element<'_, Msg>> = if self.output_find_open {
+            let find_input = text_input("Suchen…", &self.output_find_text)
+                .on_input(Msg::OutputFindTextChanged)
+                .on_submit(Msg::OutputFindNext)
+                .padding([4, 6])
+                .width(180);
+            let next_btn = button("▼")
+                .on_press(Msg::OutputFindNext)
+                .padding([4, 8]);
+            let prev_btn = button("▲")
+                .on_press(Msg::OutputFindPrev)
+                .padding([4, 8]);
+            let close_btn = button("✕")
+                .on_press(Msg::ToggleOutputFind)
+                .padding([4, 6])
+                .style(button::danger);
+            let status_text = text(self.output_find_status.as_str()).size(12);
+            let panel = container(
+                row![
+                    text("Suchen:").size(12),
+                    find_input,
+                    prev_btn,
+                    next_btn,
+                    status_text,
+                    horizontal_space(),
+                    close_btn,
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center)
+                .padding([4, 8]),
+            )
+            .style(container::bordered_box)
+            .width(Length::Fill);
+            Some(panel.into())
+        } else {
+            None
+        };
+
+        let output_section = {
+            let mut col = column![output_header].spacing(4).padding([4, 8]);
+            if let Some(fp) = output_find_panel {
+                col = col.push(fp);
+            }
+            col.push(output)
+        };
 
         // -- Layout: path row spans full width; left side has inputs + commands; right side is larger output --
         let left_panel = scrollable(
@@ -1523,12 +1754,18 @@ impl App {
         // -- Active editor (wrapped for right-click context menu) --
         let editor_widget: Element<'_, Msg> =
             if let Some(tab) = self.editor_tabs.get(self.active_tab) {
+                let line_count = tab.content.text().lines().count().max(1);
+                let gutter = make_gutter(line_count);
+                let highlight = make_highlight_layer(self.editor_highlight_line);
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
                     .height(Length::Fill);
-                mouse_area(te)
-                    .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Editor))
-                    .into()
+                let editor_stack: Element<'_, Msg> = stack![highlight, te].into();
+                mouse_area(
+                    row![gutter, editor_stack].height(Length::Fill),
+                )
+                .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Editor))
+                .into()
             } else {
                 text("Kein Tab ausgewählt").into()
             };
@@ -1683,7 +1920,8 @@ fn find_match_byte_offset(text: &str, needle: &str, match_index: usize) -> Optio
 
 /// Move the cursor in `content` to the `match_index`-th occurrence of `needle`
 /// and select exactly that occurrence so it appears highlighted.
-/// Does nothing when `needle` is empty or the match does not exist.
+/// Returns `Some((line, col))` (0-based) of the match start when successful,
+/// or `None` when `needle` is empty or the match does not exist.
 ///
 /// Note: iced 0.13's `text_editor::Action` has no direct "jump to byte offset"
 /// operation; the only way to position the cursor programmatically is through
@@ -1694,13 +1932,13 @@ fn apply_find_selection(
     content: &mut text_editor::Content,
     needle: &str,
     match_index: usize,
-) {
+) -> Option<(usize, usize)> {
     if needle.is_empty() {
-        return;
+        return None;
     }
     let text = content.text();
     let Some(byte_off) = find_match_byte_offset(&text, needle, match_index) else {
-        return;
+        return None;
     };
     let (line, col) = byte_offset_to_position(&text, byte_off);
 
@@ -1719,6 +1957,7 @@ fn apply_find_selection(
     for _ in 0..match_char_len {
         content.perform(text_editor::Action::Select(text_editor::Motion::Right));
     }
+    Some((line, col))
 }
 
 /// Rebuild `text_editor::Content` from the ring buffer.
@@ -1737,6 +1976,60 @@ fn flush_output(app: &mut App) {
     }
     app.output_content = text_editor::Content::with_text(&parts.join("\n"));
     app.output_dirty = false;
+    // Rebuilding the content invalidates any previous highlight and find position.
+    app.output_highlight_line = None;
+    app.output_find_status.clear();
+    app.output_find_current_match = 0;
+}
+
+/// Build the line-number gutter widget for `line_count` lines.
+///
+/// Renders right-aligned line numbers in a fixed-width column.
+fn make_gutter<'a>(line_count: usize) -> Element<'a, Msg> {
+    let numbers: String = (1..=line_count)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    container(text(numbers).size(12))
+        .style(|_theme| iced::widget::container::Style {
+            background: Some(iced::Background::Color(Color::from_rgba(
+                0.12, 0.12, 0.15, 0.6,
+            ))),
+            border: iced::Border::default(),
+            text_color: Some(Color::from_rgba(0.55, 0.55, 0.60, 1.0)),
+            shadow: iced::Shadow::default(),
+        })
+        .padding([0, 4])
+        .width(Length::Fixed(GUTTER_WIDTH))
+        .into()
+}
+
+/// Build a virtual highlight-overlay element that colors one line.
+///
+/// Positions a translucent yellow band at `line_index * LINE_HEIGHT` from the
+/// top of the widget.  When `line_index` is `None` the overlay is invisible.
+fn make_highlight_layer<'a>(line_index: Option<usize>) -> Element<'a, Msg> {
+    if let Some(line) = line_index {
+        let offset = line as f32 * LINE_HEIGHT;
+        column![
+            Space::with_height(Length::Fixed(offset)),
+            container(Space::new(Length::Fill, Length::Fixed(LINE_HEIGHT)))
+                .style(|_theme| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(Color::from_rgba(
+                        1.0, 0.88, 0.0, 0.22,
+                    ))),
+                    border: iced::Border::default(),
+                    text_color: None,
+                    shadow: iced::Shadow::default(),
+                })
+                .width(Length::Fill),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    } else {
+        Space::new(Length::Fill, Length::Fill).into()
+    }
 }
 
 /// Spawn a cargo process and return a [`Task`] that streams its output as
