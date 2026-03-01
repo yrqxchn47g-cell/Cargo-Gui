@@ -42,9 +42,9 @@
 
 mod config;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use config::{AppTheme, Config};
 use futures::channel::mpsc;
@@ -78,7 +78,9 @@ const TOOLTIP_OFFSET_Y: f32 = 34.0;
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
     ("Build", "build"),
+    ("Build --release", "build --release"),
     ("Run", "run"),
+    ("Run --release", "run --release"),
     ("Test", "test"),
     ("Check", "check"),
     ("Fmt", "fmt"),
@@ -200,6 +202,15 @@ struct App {
     current_job_id: u64,
     /// Send `()` here to request cancellation of the running process.
     stop_tx: Option<oneshot::Sender<()>>,
+    /// The `cargo_args` string of the currently-running command (used to
+    /// highlight the active button and match against `last_durations`).
+    running_cmd: String,
+    /// Instant the current run started; `None` when idle.
+    run_start: Option<Instant>,
+    /// Elapsed milliseconds updated every 100 ms while a run is active.
+    display_elapsed_ms: u64,
+    /// Last measured wall-clock duration (ms) for each command string.
+    last_durations: HashMap<String, u64>,
 
     status: String,
 
@@ -238,6 +249,10 @@ impl App {
                 running: false,
                 current_job_id: 0,
                 stop_tx: None,
+                running_cmd: String::new(),
+                run_start: None,
+                display_elapsed_ms: 0,
+                last_durations: HashMap::new(),
                 status: "Bereit".to_string(),
                 editor_tabs,
                 active_tab: 0,
@@ -419,6 +434,9 @@ impl App {
                 self.current_job_id += 1;
                 self.output_trimmed = false;
                 self.running = true;
+                self.running_cmd = self.cargo_args.clone();
+                self.run_start = Some(Instant::now());
+                self.display_elapsed_ms = 0;
                 self.status = "Läuft…".to_string();
 
                 let (stop_tx, stop_rx) = oneshot::channel::<()>();
@@ -460,6 +478,12 @@ impl App {
                 }
                 self.running = false;
                 self.stop_tx = None;
+                if let Some(start) = self.run_start.take() {
+                    let elapsed = start.elapsed().as_millis() as u64;
+                    self.display_elapsed_ms = elapsed;
+                    self.last_durations
+                        .insert(self.running_cmd.clone(), elapsed);
+                }
                 self.status = if success {
                     "Fertig ✓".to_string()
                 } else {
@@ -481,6 +505,11 @@ impl App {
             Msg::FlushOutput => {
                 if self.output_dirty {
                     flush_output(self);
+                }
+                if self.running {
+                    if let Some(start) = self.run_start {
+                        self.display_elapsed_ms = start.elapsed().as_millis() as u64;
+                    }
                 }
                 Task::none()
             }
@@ -816,41 +845,37 @@ impl App {
         .padding([4, 8]);
 
         // -- Cargo Befehle grid (2 columns) --
-        let left_col = column(
-            COMMANDS_LEFT
-                .iter()
-                .map(|(label, cmd)| {
-                    let cmd_str = cmd.to_string();
-                    let tip = format!("cargo {cmd}");
-                    hover_tip(
-                        button(*label)
-                            .on_press_maybe((!self.running).then_some(Msg::RunCommand(cmd_str)))
-                            .width(110)
-                            .padding([5, 8]),
-                        tip,
-                    )
-                })
-                .collect::<Vec<_>>(),
-        )
-        .spacing(4);
+        // Helper closure: builds one command button with expected/elapsed timing.
+        let make_cmd_btn = |(label, cmd): &(&str, &str)| {
+            let cmd_str = cmd.to_string();
+            let tip = format!("cargo {cmd}");
+            let duration_label = self
+                .last_durations
+                .get(&cmd_str)
+                .map(|ms| format!("{ms} ms"))
+                .unwrap_or_else(|| "?".to_string());
+            let btn_label = if self.running && self.running_cmd == cmd_str {
+                format!(
+                    "{label}\nest:{duration_label} jetzt:{} ms",
+                    self.display_elapsed_ms
+                )
+            } else {
+                format!("{label} (est:{duration_label})")
+            };
+            hover_tip(
+                button(text(btn_label).size(11))
+                    .on_press_maybe((!self.running).then_some(Msg::RunCommand(cmd_str)))
+                    .width(Length::Fill)
+                    .padding([5, 8]),
+                tip,
+            )
+        };
 
-        let right_col = column(
-            COMMANDS_RIGHT
-                .iter()
-                .map(|(label, cmd)| {
-                    let cmd_str = cmd.to_string();
-                    let tip = format!("cargo {cmd}");
-                    hover_tip(
-                        button(*label)
-                            .on_press_maybe((!self.running).then_some(Msg::RunCommand(cmd_str)))
-                            .width(110)
-                            .padding([5, 8]),
-                        tip,
-                    )
-                })
-                .collect::<Vec<_>>(),
-        )
-        .spacing(4);
+        let left_col = column(COMMANDS_LEFT.iter().map(&make_cmd_btn).collect::<Vec<_>>())
+            .spacing(4);
+
+        let right_col = column(COMMANDS_RIGHT.iter().map(&make_cmd_btn).collect::<Vec<_>>())
+            .spacing(4);
 
         let commands_grid = row![left_col, right_col].spacing(8);
 
@@ -1252,18 +1277,25 @@ Tragen Sie den gewünschten Cargo-Befehl ein, z.B.:
 
 ## Cargo Befehle (Schnellzugriff)
 Die Schaltflächen führen den jeweiligen Cargo-Befehl direkt aus:
-  Build    — Kompiliert das Projekt (cargo build)
-  Run      — Kompiliert und startet das Projekt (cargo run)
-  Test     — Führt alle Tests aus (cargo test)
-  Check    — Prüft Syntax ohne Kompilierung (cargo check)
-  Fmt      — Formatiert den Quellcode (cargo fmt)
-  Clippy   — Führt den Linter aus (cargo clippy)
-  Update   — Aktualisiert Abhängigkeiten (cargo update)
-  New      — Neues Projekt anlegen (cargo new)
-  Init     — Aktuelles Verzeichnis initialisieren (cargo init)
-  Clean    — Build-Artefakte löschen (cargo clean)
-  Doc      — Dokumentation generieren (cargo doc)
-  Bench    — Benchmarks ausführen (cargo bench)
+  Build            — Kompiliert das Projekt (cargo build)
+  Build --release  — Kompiliert optimiert (cargo build --release)
+  Run              — Kompiliert und startet das Projekt (cargo run)
+  Run --release    — Startet die Release-Version (cargo run --release)
+  Test             — Führt alle Tests aus (cargo test)
+  Check            — Prüft Syntax ohne Kompilierung (cargo check)
+  Fmt              — Formatiert den Quellcode (cargo fmt)
+  Clippy           — Führt den Linter aus (cargo clippy)
+  Update           — Aktualisiert Abhängigkeiten (cargo update)
+  New              — Neues Projekt anlegen (cargo new)
+  Init             — Aktuelles Verzeichnis initialisieren (cargo init)
+  Clean            — Build-Artefakte löschen (cargo clean)
+  Doc              — Dokumentation generieren (cargo doc)
+  Bench            — Benchmarks ausführen (cargo bench)
+
+Jede Schaltfläche zeigt hinter dem Label die erwartete Dauer an
+(est:? vor dem ersten Lauf, danach die zuletzt gemessene Zeit in ms).
+Während ein Befehl läuft, zeigt der aktive Button zusätzlich die
+aktuelle Laufzeit in Echtzeit an (jetzt: X ms).
 
 ## Neues Projekt
 Geben Sie einen Projektnamen ein und klicken Sie auf \"cargo new\", um ein
