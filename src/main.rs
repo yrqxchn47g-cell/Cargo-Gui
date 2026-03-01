@@ -748,14 +748,16 @@ impl App {
             "Diesen Pfad als Standardpfad speichern".to_string(),
         );
 
-        let path_row = row![
-            text("Projektverzeichnis:").size(13).width(150),
-            path_input,
-            browse_btn,
-            set_default_btn,
+        let path_buttons_row = row![browse_btn, set_default_btn,]
+            .spacing(6)
+            .align_y(iced::Alignment::Center);
+
+        let path_row = column![
+            text("Projektverzeichnis:").size(13),
+            path_input.width(Length::Fill),
+            path_buttons_row,
         ]
-        .spacing(6)
-        .align_y(iced::Alignment::Center)
+        .spacing(4)
         .padding([4, 8]);
 
         // -- Arguments row --
@@ -874,17 +876,22 @@ impl App {
 
         let output_section = column![output_header, output].spacing(4).padding([4, 8]);
 
-        // -- Layout: left side has inputs + commands; right side is larger output --
+        // -- Layout: path row spans full width; left side has inputs + commands; right side is larger output --
         let left_panel = scrollable(
-            column![path_row, args_row, new_row, commands_section]
+            column![args_row, new_row, commands_section]
                 .spacing(4)
                 .width(420),
         );
 
-        let main_content = row![left_panel, output_section]
-            .spacing(8)
-            .padding(8)
-            .height(Length::Fill);
+        let main_content = column![
+            path_row,
+            row![left_panel, output_section]
+                .spacing(8)
+                .padding([0, 8])
+                .height(Length::Fill),
+        ]
+        .spacing(4)
+        .padding([8, 0]);
 
         main_content.into()
     }
@@ -910,13 +917,13 @@ impl App {
             "Standard-Pfad in das Projektverzeichnis-Feld laden".to_string(),
         );
 
-        let default_path_row = row![
-            text("Standard-Pfad:").size(13).width(160),
-            default_path_input,
-            restore_btn,
+        let default_path_row = column![
+            text("Standard-Pfad:").size(13),
+            row![default_path_input.width(Length::Fill), restore_btn,]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
         ]
-        .spacing(6)
-        .align_y(iced::Alignment::Center);
+        .spacing(4);
 
         // -- Theme row --
         let theme_picker = pick_list(
