@@ -682,6 +682,17 @@ impl App {
                     self.editor_tabs.get(self.active_tab),
                     &self.find_text,
                 );
+                // Immediately jump to and select the first occurrence so the
+                // user can see it while still typing.
+                let total = count_matches(
+                    self.editor_tabs.get(self.active_tab),
+                    &self.find_text,
+                );
+                if total > 0 {
+                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                        apply_find_selection(&mut tab.content, &self.find_text, 0);
+                    }
+                }
                 Task::none()
             }
 
@@ -705,6 +716,13 @@ impl App {
                         (self.find_current_match + 1) % total;
                     self.find_status =
                         format!("{}/{}", self.find_current_match + 1, total);
+                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                        apply_find_selection(
+                            &mut tab.content,
+                            &self.find_text,
+                            self.find_current_match,
+                        );
+                    }
                 }
                 Task::none()
             }
@@ -725,6 +743,13 @@ impl App {
                         self.find_current_match.checked_sub(1).unwrap_or(total - 1);
                     self.find_status =
                         format!("{}/{}", self.find_current_match + 1, total);
+                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                        apply_find_selection(
+                            &mut tab.content,
+                            &self.find_text,
+                            self.find_current_match,
+                        );
+                    }
                 }
                 Task::none()
             }
@@ -1634,6 +1659,68 @@ fn count_matches_status(tab: Option<&EditorTab>, needle: &str) -> String {
     }
 }
 
+/// Convert a byte offset in `text` to a `(line, col)` pair where both are
+/// 0-based and `col` is measured in Unicode scalar values (chars), not bytes.
+fn byte_offset_to_position(text: &str, byte_offset: usize) -> (usize, usize) {
+    let prefix = &text[..byte_offset];
+    let line = prefix.chars().filter(|&c| c == '\n').count();
+    let col = match prefix.rfind('\n') {
+        Some(nl) => prefix[nl + 1..].chars().count(),
+        None => prefix.chars().count(),
+    };
+    (line, col)
+}
+
+/// Return the byte offset of the `match_index`-th non-overlapping occurrence
+/// of `needle` in `text`.  Returns `None` when `needle` is empty or when
+/// there are fewer than `match_index + 1` occurrences.
+fn find_match_byte_offset(text: &str, needle: &str, match_index: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    text.match_indices(needle).nth(match_index).map(|(i, _)| i)
+}
+
+/// Move the cursor in `content` to the `match_index`-th occurrence of `needle`
+/// and select exactly that occurrence so it appears highlighted.
+/// Does nothing when `needle` is empty or the match does not exist.
+///
+/// Note: iced 0.13's `text_editor::Action` has no direct "jump to byte offset"
+/// operation; the only way to position the cursor programmatically is through
+/// repeated `Motion`-based `perform` calls.  For typical source-code files this
+/// is fast enough.  A future iced version with a positional action could replace
+/// this implementation.
+fn apply_find_selection(
+    content: &mut text_editor::Content,
+    needle: &str,
+    match_index: usize,
+) {
+    if needle.is_empty() {
+        return;
+    }
+    let text = content.text();
+    let Some(byte_off) = find_match_byte_offset(&text, needle, match_index) else {
+        return;
+    };
+    let (line, col) = byte_offset_to_position(&text, byte_off);
+
+    // Move to document start, then navigate to the target line and column.
+    content.perform(text_editor::Action::Move(text_editor::Motion::DocumentStart));
+    for _ in 0..line {
+        content.perform(text_editor::Action::Move(text_editor::Motion::Down));
+    }
+    content.perform(text_editor::Action::Move(text_editor::Motion::Home));
+    for _ in 0..col {
+        content.perform(text_editor::Action::Move(text_editor::Motion::Right));
+    }
+    // Select the match.  There is no bulk-select-by-length action in the iced
+    // 0.13 API, so we extend the selection one character at a time.
+    let match_char_len = needle.chars().count();
+    for _ in 0..match_char_len {
+        content.perform(text_editor::Action::Select(text_editor::Motion::Right));
+    }
+}
+
 /// Rebuild `text_editor::Content` from the ring buffer.
 ///
 /// If trimming has occurred this run, `TRIM_NOTICE` is prepended to the
@@ -1852,7 +1939,7 @@ Das Panel öffnet sich unterhalb der Tab-Leiste:
 
 #[cfg(test)]
 mod tests {
-    use super::format_duration;
+    use super::{byte_offset_to_position, find_match_byte_offset, format_duration};
 
     #[test]
     fn format_duration_below_1000ms() {
@@ -1870,5 +1957,68 @@ mod tests {
         // Verify that standard float rounding is applied (1999 ms → 2.00 s after rounding).
         assert_eq!(format_duration(1999), "2.00 s");
         assert_eq!(format_duration(1994), "1.99 s");
+    }
+
+    // --- byte_offset_to_position ---
+
+    #[test]
+    fn byte_offset_to_position_single_line() {
+        let text = "hello world";
+        assert_eq!(byte_offset_to_position(text, 0), (0, 0));
+        assert_eq!(byte_offset_to_position(text, 6), (0, 6));
+    }
+
+    #[test]
+    fn byte_offset_to_position_multi_line() {
+        let text = "abc\ndef\nghi";
+        // "abc\n" = 4 bytes; "def\n" = 4 bytes
+        assert_eq!(byte_offset_to_position(text, 0), (0, 0)); // 'a'
+        assert_eq!(byte_offset_to_position(text, 4), (1, 0)); // 'd'
+        assert_eq!(byte_offset_to_position(text, 6), (1, 2)); // 'f'
+        assert_eq!(byte_offset_to_position(text, 8), (2, 0)); // 'g'
+    }
+
+    #[test]
+    fn byte_offset_to_position_unicode() {
+        // "ä" is 2 bytes (U+00E4) but 1 char
+        let text = "aäb\ncd";
+        // byte layout: a=0, ä=1-2, b=3, \n=4, c=5, d=6
+        assert_eq!(byte_offset_to_position(text, 3), (0, 2)); // 'b' at char-col 2
+        assert_eq!(byte_offset_to_position(text, 5), (1, 0)); // 'c'
+    }
+
+    // --- find_match_byte_offset ---
+
+    #[test]
+    fn find_match_byte_offset_empty_needle() {
+        assert_eq!(find_match_byte_offset("hello", "", 0), None);
+    }
+
+    #[test]
+    fn find_match_byte_offset_no_match() {
+        assert_eq!(find_match_byte_offset("hello", "xyz", 0), None);
+    }
+
+    #[test]
+    fn find_match_byte_offset_first_match() {
+        assert_eq!(find_match_byte_offset("abcabc", "bc", 0), Some(1));
+    }
+
+    #[test]
+    fn find_match_byte_offset_second_match() {
+        assert_eq!(find_match_byte_offset("abcabc", "bc", 1), Some(4));
+    }
+
+    #[test]
+    fn find_match_byte_offset_out_of_range() {
+        assert_eq!(find_match_byte_offset("abcabc", "bc", 2), None);
+    }
+
+    #[test]
+    fn find_match_byte_offset_multiline() {
+        let text = "foo\nbar\nfoo";
+        // First "foo" at byte 0, second at byte 8
+        assert_eq!(find_match_byte_offset(text, "foo", 0), Some(0));
+        assert_eq!(find_match_byte_offset(text, "foo", 1), Some(8));
     }
 }
