@@ -87,6 +87,12 @@ const FIND_OTHER_COLOR: Color = Color { r: 1.0, g: 0.88, b: 0.0, a: 0.13 };
 /// Background colour for the current find-match highlight band (strong orange-yellow).
 const FIND_CURRENT_COLOR: Color = Color { r: 1.0, g: 0.65, b: 0.0, a: 0.40 };
 
+/// Alternative test color for the current find-match highlight band (green).
+const FIND_TEST_COLOR_GREEN: Color = Color { r: 0.0, g: 0.75, b: 0.2, a: 0.40 };
+
+/// Alternative test color for the current find-match highlight band (red).
+const FIND_TEST_COLOR_RED: Color = Color { r: 1.0, g: 0.0, b: 0.0, a: 0.40 };
+
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
     ("Build", "build"),
@@ -269,7 +275,7 @@ struct App {
     find_current_match: usize,
     /// Line numbers (0-based) of every match in the current tab for multi-highlight.
     find_all_match_lines: Vec<usize>,
-    /// Highlight colour used for the *current* find-match band (testable at runtime).
+    /// Highlight color used for the *current* find-match band (testable at runtime).
     find_test_color: Color,
 
     // --- Context menu state ---
@@ -1909,10 +1915,10 @@ impl App {
                 .on_press(Msg::SetFindTestColor(FIND_CURRENT_COLOR))
                 .padding([2, 8]),
             button("Grün")
-                .on_press(Msg::SetFindTestColor(Color { r: 0.0, g: 0.75, b: 0.2, a: 0.40 }))
+                .on_press(Msg::SetFindTestColor(FIND_TEST_COLOR_GREEN))
                 .padding([2, 8]),
             button("Rot")
-                .on_press(Msg::SetFindTestColor(Color { r: 1.0, g: 0.0, b: 0.0, a: 0.40 }))
+                .on_press(Msg::SetFindTestColor(FIND_TEST_COLOR_RED))
                 .padding([2, 8]),
         ]
         .spacing(6)
