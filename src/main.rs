@@ -87,6 +87,12 @@ const FIND_OTHER_COLOR: Color = Color { r: 1.0, g: 0.88, b: 0.0, a: 0.13 };
 /// Background colour for the current find-match highlight band (strong orange-yellow).
 const FIND_CURRENT_COLOR: Color = Color { r: 1.0, g: 0.65, b: 0.0, a: 0.40 };
 
+/// Alternative test color for the current find-match highlight band (green).
+const FIND_TEST_COLOR_GREEN: Color = Color { r: 0.0, g: 0.75, b: 0.2, a: 0.40 };
+
+/// Alternative test color for the current find-match highlight band (red).
+const FIND_TEST_COLOR_RED: Color = Color { r: 1.0, g: 0.0, b: 0.0, a: 0.40 };
+
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
     ("Build", "build"),
@@ -269,6 +275,8 @@ struct App {
     find_current_match: usize,
     /// Line numbers (0-based) of every match in the current tab for multi-highlight.
     find_all_match_lines: Vec<usize>,
+    /// Highlight color used for the *current* find-match band (testable at runtime).
+    find_test_color: Color,
 
     // --- Context menu state ---
     /// Non-None when a context menu is currently visible.
@@ -333,6 +341,7 @@ impl App {
                 find_status: String::new(),
                 find_current_match: 0,
                 find_all_match_lines: Vec::new(),
+                find_test_color: FIND_CURRENT_COLOR,
                 context_menu: None,
                 editor_highlight_line: None,
                 output_find_open: false,
@@ -435,6 +444,8 @@ enum Msg {
     ReplaceOne,
     /// Replace every occurrence in the active tab.
     ReplaceAll,
+    /// Change the highlight colour of the current find-match band.
+    SetFindTestColor(Color),
 
     // --- Output find panel ---
     /// Toggle the output-specific find panel open or closed.
@@ -946,6 +957,11 @@ impl App {
                         self.find_status = format!("{count} ersetzt");
                     }
                 }
+                Task::none()
+            }
+
+            Msg::SetFindTestColor(color) => {
+                self.find_test_color = color;
                 Task::none()
             }
 
@@ -1855,6 +1871,7 @@ impl App {
                 let highlight = make_multi_highlight_layer(
                     &self.find_all_match_lines,
                     self.find_current_match,
+                    self.find_test_color,
                 );
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
@@ -1891,6 +1908,22 @@ impl App {
         if let Some(panel) = find_replace_panel {
             col = col.push(panel);
         }
+
+        let color_row = row![
+            text("Trefferfarbe:").size(12),
+            button("Gelb")
+                .on_press(Msg::SetFindTestColor(FIND_CURRENT_COLOR))
+                .padding([2, 8]),
+            button("Grün")
+                .on_press(Msg::SetFindTestColor(FIND_TEST_COLOR_GREEN))
+                .padding([2, 8]),
+            button("Rot")
+                .on_press(Msg::SetFindTestColor(FIND_TEST_COLOR_RED))
+                .padding([2, 8]),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+        col = col.push(color_row);
 
         col.push(editor_widget).into()
     }
@@ -2208,7 +2241,7 @@ fn collect_all_match_lines(text: &str, needle: &str) -> Vec<usize> {
 ///
 /// If `current_match >= all_lines.len()` no line receives the stronger
 /// highlight; this is safe (no panic) and indicates there is no active match.
-fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize) -> Element<'a, Msg> {
+fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize, current_color: Color) -> Element<'a, Msg> {
     if all_lines.is_empty() {
         return Space::new(Length::Fill, Length::Fill).into();
     }
@@ -2218,7 +2251,7 @@ fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize) -> 
     layers.push(Space::new(Length::Fill, Length::Fill).into());
 
     for (i, &line) in all_lines.iter().enumerate() {
-        let color = if i == current_match { FIND_CURRENT_COLOR } else { FIND_OTHER_COLOR };
+        let color = if i == current_match { current_color } else { FIND_OTHER_COLOR };
         let offset = line as f32 * LINE_HEIGHT;
         let band: Element<'a, Msg> = column![
             Space::with_height(Length::Fixed(offset)),
