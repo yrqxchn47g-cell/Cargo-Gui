@@ -350,7 +350,7 @@ impl App {
                 find_all_match_lines: Vec::new(),
                 context_menu: None,
                 editor_highlight_line: None,
-                find_test_color: FIND_CURRENT_COLOR,
+                find_test_color: FIND_TEST_RED_COLOR,
                 output_find_open: false,
                 output_find_text: String::new(),
                 output_find_status: String::new(),
@@ -749,15 +749,13 @@ impl App {
                     let hl_line =
                         self.find_all_match_lines.get(self.find_current_match).copied();
                     self.editor_highlight_line = hl_line;
-                    self.find_status = match hl_line {
-                        Some(line) => format!(
-                            "{}/{} — Zeile {}",
-                            self.find_current_match + 1,
-                            total,
-                            line + 1
-                        ),
-                        None => format!("{}/{}", self.find_current_match + 1, total),
-                    };
+                    let tab_title = self
+                        .editor_tabs
+                        .get(self.active_tab)
+                        .map(|t| t.title.as_str())
+                        .unwrap_or_default();
+                    self.find_status =
+                        editor_find_status_text(self.find_current_match, total, tab_title, hl_line);
                     if let Some(line) = hl_line {
                         return scroll_editor_to_line(line);
                     }
@@ -882,10 +880,12 @@ impl App {
                     // matches the visual highlight overlay.
                     let hl_line = self.find_all_match_lines.first().copied();
                     self.editor_highlight_line = hl_line;
-                    self.find_status = match hl_line {
-                        Some(line) => format!("1/{total} — Zeile {}", line + 1),
-                        None => format!("1/{total}"),
-                    };
+                    let tab_title = self
+                        .editor_tabs
+                        .get(self.active_tab)
+                        .map(|t| t.title.as_str())
+                        .unwrap_or_default();
+                    self.find_status = editor_find_status_text(0, total, tab_title, hl_line);
                 }
                 if let Some(&line) = self.find_all_match_lines.first() {
                     scroll_editor_to_line(line)
@@ -923,13 +923,13 @@ impl App {
                 // always in sync with the visual overlay.
                 let hl_line = self.find_all_match_lines.get(self.find_current_match).copied();
                 self.editor_highlight_line = hl_line;
-                self.find_status = match hl_line {
-                    Some(line) => format!(
-                        "{}/{} — Zeile {}",
-                        self.find_current_match + 1, total, line + 1
-                    ),
-                    None => format!("{}/{}", self.find_current_match + 1, total),
-                };
+                let tab_title = self
+                    .editor_tabs
+                    .get(self.active_tab)
+                    .map(|t| t.title.as_str())
+                    .unwrap_or_default();
+                self.find_status =
+                    editor_find_status_text(self.find_current_match, total, tab_title, hl_line);
                 if let Some(line) = hl_line {
                     scroll_editor_to_line(line)
                 } else {
@@ -960,13 +960,13 @@ impl App {
                 }
                 let hl_line = self.find_all_match_lines.get(self.find_current_match).copied();
                 self.editor_highlight_line = hl_line;
-                self.find_status = match hl_line {
-                    Some(line) => format!(
-                        "{}/{} — Zeile {}",
-                        self.find_current_match + 1, total, line + 1
-                    ),
-                    None => format!("{}/{}", self.find_current_match + 1, total),
-                };
+                let tab_title = self
+                    .editor_tabs
+                    .get(self.active_tab)
+                    .map(|t| t.title.as_str())
+                    .unwrap_or_default();
+                self.find_status =
+                    editor_find_status_text(self.find_current_match, total, tab_title, hl_line);
                 if let Some(line) = hl_line {
                     scroll_editor_to_line(line)
                 } else {
@@ -1015,8 +1015,10 @@ impl App {
                                 self.find_current_match,
                             );
                             self.editor_highlight_line = sel_pos.map(|(l, _)| l);
-                            self.find_status =
-                                format!("{}/{}", self.find_current_match + 1, new_total);
+                            self.find_status = format!(
+                                "Treffer {} von {}",
+                                self.find_current_match + 1, new_total
+                            );
                         }
                     }
                 }
@@ -1085,10 +1087,8 @@ impl App {
                         0,
                     );
                     self.output_highlight_line = pos.map(|(line, _)| line);
-                    self.output_find_status = match pos {
-                        Some((line, _)) => format!("1/{total} — Zeile {}", line + 1),
-                        None => format!("1/{total}"),
-                    };
+                    self.output_find_status =
+                        output_find_status_text(0, total, pos.map(|(line, _)| line));
                 }
                 Task::none()
             }
@@ -1113,16 +1113,11 @@ impl App {
                         self.output_find_current_match,
                     );
                     self.output_highlight_line = pos.map(|(line, _)| line);
-                    self.output_find_status = match pos {
-                        Some((line, _)) => format!(
-                            "{}/{} — Zeile {}",
-                            self.output_find_current_match + 1, total, line + 1
-                        ),
-                        None => format!(
-                            "{}/{}",
-                            self.output_find_current_match + 1, total
-                        ),
-                    };
+                    self.output_find_status = output_find_status_text(
+                        self.output_find_current_match,
+                        total,
+                        pos.map(|(line, _)| line),
+                    );
                 }
                 Task::none()
             }
@@ -1147,16 +1142,11 @@ impl App {
                         self.output_find_current_match,
                     );
                     self.output_highlight_line = pos.map(|(line, _)| line);
-                    self.output_find_status = match pos {
-                        Some((line, _)) => format!(
-                            "{}/{} — Zeile {}",
-                            self.output_find_current_match + 1, total, line + 1
-                        ),
-                        None => format!(
-                            "{}/{}",
-                            self.output_find_current_match + 1, total
-                        ),
-                    };
+                    self.output_find_status = output_find_status_text(
+                        self.output_find_current_match,
+                        total,
+                        pos.map(|(line, _)| line),
+                    );
                 }
                 Task::none()
             }
@@ -2416,7 +2406,39 @@ fn scroll_editor_to_line(line: usize) -> Task<Msg> {
     )
 }
 
-/// Spawn a cargo process and return a [`Task`] that streams its output as
+/// Build the find-status string for the **editor** panel.
+///
+/// Format: `"Treffer {current+1} von {total} | {tab_title}:{line+1}"`
+/// Fallback (no line): `"Treffer {current+1} von {total}"`
+fn editor_find_status_text(
+    current: usize,
+    total: usize,
+    tab_title: &str,
+    hl_line: Option<usize>,
+) -> String {
+    match hl_line {
+        Some(line) => format!(
+            "Treffer {} von {} | {}:{}",
+            current + 1,
+            total,
+            tab_title,
+            line + 1
+        ),
+        None => format!("Treffer {} von {}", current + 1, total),
+    }
+}
+
+/// Build the find-status string for the **output** panel (no file context).
+///
+/// Format: `"Treffer {current+1} von {total} | Zeile {line+1}"`
+/// Fallback (no line): `"Treffer {current+1} von {total}"`
+fn output_find_status_text(current: usize, total: usize, hl_line: Option<usize>) -> String {
+    match hl_line {
+        Some(line) => format!("Treffer {} von {} | Zeile {}", current + 1, total, line + 1),
+        None => format!("Treffer {} von {}", current + 1, total),
+    }
+}
+
 /// [`Msg::Append`] messages, followed by a single [`Msg::Done`].
 ///
 /// `stop_rx`: receiving `()` kills the child process and sends
@@ -2987,12 +3009,13 @@ mod tests {
         let lines = collect_all_match_lines(text, "alpha");
         assert_eq!(lines, vec![0, 2]);
         let total = lines.len();
-        // match index 0 → "1/2 — Zeile 1"
-        let s0 = format!("1/{total} — Zeile {}", lines[0] + 1);
-        assert_eq!(s0, "1/2 — Zeile 1");
-        // match index 1 → "2/2 — Zeile 3"
-        let s1 = format!("2/{total} — Zeile {}", lines[1] + 1);
-        assert_eq!(s1, "2/2 — Zeile 3");
+        let tab = "test.rs";
+        // match index 0 → "Treffer 1 von 2 | test.rs:1"
+        let s0 = format!("Treffer 1 von {total} | {}:{}", tab, lines[0] + 1);
+        assert_eq!(s0, "Treffer 1 von 2 | test.rs:1");
+        // match index 1 → "Treffer 2 von 2 | test.rs:3"
+        let s1 = format!("Treffer 2 von {total} | {}:{}", tab, lines[1] + 1);
+        assert_eq!(s1, "Treffer 2 von 2 | test.rs:3");
     }
 
     // --- Arrow-key navigation wraps correctly ---
@@ -3049,6 +3072,7 @@ mod tests {
         let lines = collect_all_match_lines(new_tab_text, needle);
         assert_eq!(lines, vec![0, 2]);
         let total = lines.len();
+        let tab_title = "test.rs";
 
         // User was at match index 1 before switching tabs.
         let prev_current_match = 1usize;
@@ -3057,16 +3081,17 @@ mod tests {
         let hl_line = lines.get(find_current_match).copied();
         let find_status = match hl_line {
             Some(line) => format!(
-                "{}/{} — Zeile {}",
+                "Treffer {} von {} | {}:{}",
                 find_current_match + 1,
                 total,
+                tab_title,
                 line + 1
             ),
-            None => format!("{}/{}", find_current_match + 1, total),
+            None => format!("Treffer {} von {}", find_current_match + 1, total),
         };
         assert_eq!(find_current_match, 1);
         assert_eq!(hl_line, Some(2));
-        assert_eq!(find_status, "2/2 — Zeile 3");
+        assert_eq!(find_status, "Treffer 2 von 2 | test.rs:3");
     }
 
     /// When find_current_match exceeds the new tab's match count, it must be
@@ -3078,6 +3103,7 @@ mod tests {
         let lines = collect_all_match_lines(new_tab_text, needle);
         assert_eq!(lines, vec![0]);
         let total = lines.len();
+        let tab_title = "test.rs";
 
         // User was at match index 3 in a tab with many matches.
         let prev_current_match = 3usize;
@@ -3086,20 +3112,21 @@ mod tests {
         let hl_line = lines.get(find_current_match).copied();
         let find_status = match hl_line {
             Some(line) => format!(
-                "{}/{} — Zeile {}",
+                "Treffer {} von {} | {}:{}",
                 find_current_match + 1,
                 total,
+                tab_title,
                 line + 1
             ),
-            None => format!("{}/{}", find_current_match + 1, total),
+            None => format!("Treffer {} von {}", find_current_match + 1, total),
         };
         assert_eq!(find_current_match, 0);
         assert_eq!(hl_line, Some(0));
-        assert_eq!(find_status, "1/1 — Zeile 1");
+        assert_eq!(find_status, "Treffer 1 von 1 | test.rs:1");
     }
 
     /// When switching to a different tab that has matches and find_current_match
-    /// is 0, find_status shows "1/N — Zeile K" for the first match.
+    /// is 0, find_status shows "Treffer 1 von N | file:K" for the first match.
     #[test]
     fn tab_select_updates_find_status_with_matches() {
         // Simulate the new-tab text and the recomputed match list.
@@ -3108,6 +3135,7 @@ mod tests {
         let lines = collect_all_match_lines(new_tab_text, needle);
         assert_eq!(lines, vec![0, 2]);
         let total = lines.len();
+        let tab_title = "test.rs";
 
         // Mimic what TabSelect now does: clamp current_match (here 0 → stays 0),
         // recompute lines, then derive find_status from lines[0].
@@ -3116,16 +3144,17 @@ mod tests {
         let hl_line = lines.get(find_current_match).copied();
         let find_status = match hl_line {
             Some(line) => format!(
-                "{}/{} — Zeile {}",
+                "Treffer {} von {} | {}:{}",
                 find_current_match + 1,
                 total,
+                tab_title,
                 line + 1
             ),
-            None => format!("{}/{}", find_current_match + 1, total),
+            None => format!("Treffer {} von {}", find_current_match + 1, total),
         };
         assert_eq!(find_current_match, 0);
         assert_eq!(hl_line, Some(0));
-        assert_eq!(find_status, "1/2 — Zeile 1");
+        assert_eq!(find_status, "Treffer 1 von 2 | test.rs:1");
     }
 
     /// When switching to a different tab that has NO matches, find_status must
