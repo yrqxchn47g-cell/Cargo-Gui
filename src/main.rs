@@ -708,7 +708,6 @@ impl App {
                 if idx < self.editor_tabs.len() && idx != self.active_tab {
                     self.active_tab = idx;
                     self.editor_highlight_line = None;
-                    self.find_current_match = 0;
                     // Recompute all-match highlights for the newly active tab.
                     if self.find_replace_open && !self.find_text.is_empty() {
                         if let Some(tab) = self.editor_tabs.get(idx) {
@@ -724,20 +723,43 @@ impl App {
                     // Synchronise find_status with the newly computed match list so
                     // that the status display always reflects the current tab's
                     // matches (fixes: stale / incorrect line-number in the status).
+                    // Clamp the existing match index to the new list length so the
+                    // user's position is preserved as closely as possible instead of
+                    // being silently reset to 0.
                     let total = self.find_all_match_lines.len();
                     if total == 0 {
+                        self.find_current_match = 0;
                         self.find_status = if !self.find_text.is_empty() {
                             "Nicht gefunden".to_string()
                         } else {
                             String::new()
                         };
-                    } else {
-                        let hl_line = self.find_all_match_lines.first().copied();
-                        self.editor_highlight_line = hl_line;
-                        self.find_status = match hl_line {
-                            Some(line) => format!("1/{total} — Zeile {}", line + 1),
-                            None => format!("1/{total}"),
-                        };
+                        return Task::none();
+                    }
+                    // Clamp to valid range.
+                    self.find_current_match =
+                        self.find_current_match.min(total - 1);
+                    if let Some(tab) = self.editor_tabs.get_mut(idx) {
+                        apply_find_selection(
+                            &mut tab.content,
+                            &self.find_text,
+                            self.find_current_match,
+                        );
+                    }
+                    let hl_line =
+                        self.find_all_match_lines.get(self.find_current_match).copied();
+                    self.editor_highlight_line = hl_line;
+                    self.find_status = match hl_line {
+                        Some(line) => format!(
+                            "{}/{} — Zeile {}",
+                            self.find_current_match + 1,
+                            total,
+                            line + 1
+                        ),
+                        None => format!("{}/{}", self.find_current_match + 1, total),
+                    };
+                    if let Some(line) = hl_line {
+                        return scroll_editor_to_line(line);
                     }
                 }
                 Task::none()
@@ -3000,8 +3022,66 @@ mod tests {
 
     // --- TabSelect find_status synchronisation ---
 
-    /// When switching to a different tab that has matches, find_status must be
-    /// updated to show "1/N — Zeile K" for the first match in the new tab.
+    /// When switching to a different tab that has matches and the previous
+    /// find_current_match is within the new list, the position is preserved.
+    #[test]
+    fn tab_select_preserves_match_position() {
+        let new_tab_text = "alpha\nbeta\nalpha\ngamma";
+        let needle = "alpha";
+        let lines = collect_all_match_lines(new_tab_text, needle);
+        assert_eq!(lines, vec![0, 2]);
+        let total = lines.len();
+
+        // User was at match index 1 before switching tabs.
+        let prev_current_match = 1usize;
+        // Clamp: 1 < 2, so index stays at 1.
+        let find_current_match = prev_current_match.min(total - 1);
+        let hl_line = lines.get(find_current_match).copied();
+        let find_status = match hl_line {
+            Some(line) => format!(
+                "{}/{} — Zeile {}",
+                find_current_match + 1,
+                total,
+                line + 1
+            ),
+            None => format!("{}/{}", find_current_match + 1, total),
+        };
+        assert_eq!(find_current_match, 1);
+        assert_eq!(hl_line, Some(2));
+        assert_eq!(find_status, "2/2 — Zeile 3");
+    }
+
+    /// When find_current_match exceeds the new tab's match count, it must be
+    /// clamped to the last valid index (not reset to 0).
+    #[test]
+    fn tab_select_clamps_match_index_when_too_large() {
+        let new_tab_text = "alpha\nbeta\ngamma";
+        let needle = "alpha";
+        let lines = collect_all_match_lines(new_tab_text, needle);
+        assert_eq!(lines, vec![0]);
+        let total = lines.len();
+
+        // User was at match index 3 in a tab with many matches.
+        let prev_current_match = 3usize;
+        // Clamp: min(3, total-1) = min(3, 0) = 0, the only valid index.
+        let find_current_match = prev_current_match.min(total - 1);
+        let hl_line = lines.get(find_current_match).copied();
+        let find_status = match hl_line {
+            Some(line) => format!(
+                "{}/{} — Zeile {}",
+                find_current_match + 1,
+                total,
+                line + 1
+            ),
+            None => format!("{}/{}", find_current_match + 1, total),
+        };
+        assert_eq!(find_current_match, 0);
+        assert_eq!(hl_line, Some(0));
+        assert_eq!(find_status, "1/1 — Zeile 1");
+    }
+
+    /// When switching to a different tab that has matches and find_current_match
+    /// is 0, find_status shows "1/N — Zeile K" for the first match.
     #[test]
     fn tab_select_updates_find_status_with_matches() {
         // Simulate the new-tab text and the recomputed match list.
@@ -3011,13 +3091,19 @@ mod tests {
         assert_eq!(lines, vec![0, 2]);
         let total = lines.len();
 
-        // Mimic what TabSelect now does: reset current_match to 0, recompute
-        // lines, then derive find_status from lines[0].
-        let find_current_match = 0usize;
-        let hl_line = lines.first().copied();
+        // Mimic what TabSelect now does: clamp current_match (here 0 → stays 0),
+        // recompute lines, then derive find_status from lines[0].
+        let prev_current_match = 0usize;
+        let find_current_match = prev_current_match.min(total - 1);
+        let hl_line = lines.get(find_current_match).copied();
         let find_status = match hl_line {
-            Some(line) => format!("1/{total} — Zeile {}", line + 1),
-            None => format!("1/{total}"),
+            Some(line) => format!(
+                "{}/{} — Zeile {}",
+                find_current_match + 1,
+                total,
+                line + 1
+            ),
+            None => format!("{}/{}", find_current_match + 1, total),
         };
         assert_eq!(find_current_match, 0);
         assert_eq!(hl_line, Some(0));
@@ -3033,12 +3119,16 @@ mod tests {
         let lines = collect_all_match_lines(new_tab_text, needle);
         assert!(lines.is_empty());
 
-        // Mimic what TabSelect does when total == 0.
+        // Mimic what TabSelect does when total == 0: reset to 0, clear highlight.
+        let find_current_match = 0usize;
+        let editor_highlight_line: Option<usize> = None;
         let find_status = if !needle.is_empty() {
             "Nicht gefunden".to_string()
         } else {
             String::new()
         };
+        assert_eq!(find_current_match, 0);
+        assert_eq!(editor_highlight_line, None);
         assert_eq!(find_status, "Nicht gefunden");
     }
 
