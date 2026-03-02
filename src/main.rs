@@ -350,7 +350,7 @@ impl App {
                 find_all_match_lines: Vec::new(),
                 context_menu: None,
                 editor_highlight_line: None,
-                find_test_color: FIND_CURRENT_COLOR,
+                find_test_color: FIND_TEST_RED_COLOR,
                 output_find_open: false,
                 output_find_text: String::new(),
                 output_find_status: String::new(),
