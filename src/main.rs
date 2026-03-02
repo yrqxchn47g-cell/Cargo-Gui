@@ -441,6 +441,11 @@ enum Msg {
     OpenFile,
     /// File chosen via rfd; `None` means the dialog was cancelled.
     FilePicked(Option<(PathBuf, String)>),
+    /// Save the active tab (direct write if path known, otherwise open save dialog).
+    SaveFile,
+    /// Native save completed.
+    /// `None` = dialog was cancelled; `Some(Ok(path))` = success; `Some(Err(msg))` = I/O error.
+    SaveDone(Option<Result<PathBuf, String>>),
 
     // --- Find / Replace ---
     /// Toggle the find/replace panel open or closed.
@@ -821,6 +826,67 @@ impl App {
                         self.editor_tabs
                             .push(EditorTab::from_file(path, &file_text));
                         self.active_tab = self.editor_tabs.len() - 1;
+                    }
+                }
+                Task::none()
+            }
+
+            Msg::SaveFile => {
+                let Some(tab) = self.editor_tabs.get(self.active_tab) else {
+                    return Task::none();
+                };
+                let text_content = tab.content.text();
+                if let Some(path) = tab.path.clone() {
+                    Task::perform(
+                        async move {
+                            Some(
+                                tokio::fs::write(&path, text_content.as_bytes())
+                                    .await
+                                    .map(|()| path)
+                                    .map_err(|e| e.to_string()),
+                            )
+                        },
+                        Msg::SaveDone,
+                    )
+                } else {
+                    Task::perform(
+                        async move {
+                            let handle = rfd::AsyncFileDialog::new().save_file().await?;
+                            let path = handle.path().to_path_buf();
+                            Some(
+                                tokio::fs::write(&path, text_content.as_bytes())
+                                    .await
+                                    .map(|()| path)
+                                    .map_err(|e| e.to_string()),
+                            )
+                        },
+                        Msg::SaveDone,
+                    )
+                }
+            }
+
+            Msg::SaveDone(maybe) => {
+                match maybe {
+                    None => {
+                        // User cancelled the save dialog — no action needed.
+                    }
+                    Some(Ok(path)) => {
+                        if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                            tab.dirty = false;
+                            // Update title/path when saving an untitled tab for the first time
+                            // (tab.path is None before save, so it differs from the new path).
+                            if tab.path.as_deref() != Some(&path) {
+                                tab.title = path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| "Unbekannt".to_string());
+                                tab.path = Some(path.clone());
+                            }
+                            self.status = format!("Datei gespeichert: {}", path.display());
+                        }
+                    }
+                    Some(Err(msg)) => {
+                        self.status = format!("Fehler beim Speichern: {msg}");
                     }
                 }
                 Task::none()
@@ -1960,6 +2026,14 @@ impl App {
             "Datei öffnen — öffnet einen nativen Dateiauswahl-Dialog".to_string(),
         );
 
+        let save_btn = hover_tip(
+            button(text("💾 Speichern").size(fs))
+                .on_press(Msg::SaveFile)
+                .padding([5, 10])
+                .style(readable_button_style),
+            "Aktiven Tab speichern — bei Untitled wird ein Speichern-Dialog geöffnet".to_string(),
+        );
+
         let find_replace_toggle_label = if self.find_replace_open {
             "🔍 Suchen ✕"
         } else {
@@ -2166,9 +2240,10 @@ impl App {
                 back_btn,
                 text("Editor").size(18),
                 horizontal_space(),
-                find_btn,
                 new_tab_btn,
-                open_btn
+                open_btn,
+                save_btn,
+                find_btn,
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
@@ -2895,11 +2970,13 @@ Verfügbare Themes:
 
 ## Editor
 Unter \"✏ Editor\" steht ein Texteditor mit Tabs zur Verfügung.
-  - \"+ Neu\"      — Neuen leeren Tab öffnen
-  - \"📂 Öffnen\"  — Datei laden (öffnet nativen Dateiauswahl-Dialog)
-  - \"✕\"          — Tab schließen
-  - \"*\"          im Tabtitel zeigt ungespeicherte Änderungen an.
-  - \"🔍 Suchen\"  — Inline-Suchleiste ein-/ausblenden (auch per Ctrl+F / Ctrl+H).
+  - \"+ Neu\"        — Neuen leeren Tab öffnen
+  - \"📂 Öffnen\"    — Datei laden (öffnet nativen Dateiauswahl-Dialog)
+  - \"💾 Speichern\" — Aktiven Tab speichern; bei Untitled-Dateien wird ein
+                       nativer Speichern-Dialog geöffnet.
+  - \"✕\"            — Tab schließen
+  - \"*\"            im Tabtitel zeigt ungespeicherte Änderungen an.
+  - \"🔍 Suchen\"    — Inline-Suchleiste ein-/ausblenden (auch per Ctrl+F / Ctrl+H).
   - Rechtsklick im Editor öffnet ein Kontextmenü mit Kopieren, Ausschneiden,
     Einfügen, Alles auswählen und Suchen/Ersetzen.
 
