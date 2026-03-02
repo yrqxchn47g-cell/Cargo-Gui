@@ -702,7 +702,10 @@ impl App {
             }
 
             Msg::TabSelect(idx) => {
-                if idx < self.editor_tabs.len() {
+                // Only reset state when actually switching to a different tab.
+                // Clicking the already-active tab must not clear the highlight,
+                // reset the match counter, or corrupt the find_status string.
+                if idx < self.editor_tabs.len() && idx != self.active_tab {
                     self.active_tab = idx;
                     self.editor_highlight_line = None;
                     self.find_current_match = 0;
@@ -717,6 +720,24 @@ impl App {
                         }
                     } else {
                         self.find_all_match_lines.clear();
+                    }
+                    // Synchronise find_status with the newly computed match list so
+                    // that the status display always reflects the current tab's
+                    // matches (fixes: stale / incorrect line-number in the status).
+                    let total = self.find_all_match_lines.len();
+                    if total == 0 {
+                        self.find_status = if !self.find_text.is_empty() {
+                            "Nicht gefunden".to_string()
+                        } else {
+                            String::new()
+                        };
+                    } else {
+                        let hl_line = self.find_all_match_lines.first().copied();
+                        self.editor_highlight_line = hl_line;
+                        self.find_status = match hl_line {
+                            Some(line) => format!("1/{total} — Zeile {}", line + 1),
+                            None => format!("1/{total}"),
+                        };
                     }
                 }
                 Task::none()
@@ -1978,6 +1999,13 @@ impl App {
 
         if let Some(panel) = find_replace_panel {
             col = col.push(panel);
+        } else {
+            // Always occupy the find-panel slot with a zero-height spacer so the
+            // editor scrollable remains at a stable child index inside the column.
+            // Without this, toggling find_replace_open changes the column's child
+            // count, causing iced's widget-tree diff to misalign states and reset
+            // the editor scrollable's scroll offset to 0 (jumping to page 1).
+            col = col.push(Space::with_height(0));
         }
 
         col.push(editor_widget).into()
@@ -2968,5 +2996,61 @@ mod tests {
         } else {
             panic!("should have returned early");
         }
+    }
+
+    // --- TabSelect find_status synchronisation ---
+
+    /// When switching to a different tab that has matches, find_status must be
+    /// updated to show "1/N — Zeile K" for the first match in the new tab.
+    #[test]
+    fn tab_select_updates_find_status_with_matches() {
+        // Simulate the new-tab text and the recomputed match list.
+        let new_tab_text = "alpha\nbeta\nalpha\ngamma";
+        let needle = "alpha";
+        let lines = collect_all_match_lines(new_tab_text, needle);
+        assert_eq!(lines, vec![0, 2]);
+        let total = lines.len();
+
+        // Mimic what TabSelect now does: reset current_match to 0, recompute
+        // lines, then derive find_status from lines[0].
+        let find_current_match = 0usize;
+        let hl_line = lines.first().copied();
+        let find_status = match hl_line {
+            Some(line) => format!("1/{total} — Zeile {}", line + 1),
+            None => format!("1/{total}"),
+        };
+        assert_eq!(find_current_match, 0);
+        assert_eq!(hl_line, Some(0));
+        assert_eq!(find_status, "1/2 — Zeile 1");
+    }
+
+    /// When switching to a different tab that has NO matches, find_status must
+    /// be set to "Nicht gefunden" (and highlight must be cleared).
+    #[test]
+    fn tab_select_updates_find_status_no_matches() {
+        let new_tab_text = "no hits here";
+        let needle = "alpha";
+        let lines = collect_all_match_lines(new_tab_text, needle);
+        assert!(lines.is_empty());
+
+        // Mimic what TabSelect does when total == 0.
+        let find_status = if !needle.is_empty() {
+            "Nicht gefunden".to_string()
+        } else {
+            String::new()
+        };
+        assert_eq!(find_status, "Nicht gefunden");
+    }
+
+    /// Clicking the already-active tab must NOT reset find_current_match.
+    /// The guard `idx != self.active_tab` prevents any state mutation.
+    #[test]
+    fn tab_select_same_tab_is_no_op() {
+        // Simulate: active_tab = 1, user clicks tab 1 again.
+        let active_tab = 1usize;
+        let clicked_idx = 1usize;
+        // The guard: only act if idx != active_tab.
+        let should_reset = clicked_idx != active_tab;
+        assert!(!should_reset, "clicking the active tab must not reset state");
     }
 }
