@@ -663,8 +663,7 @@ impl App {
                     "Fehlgeschlagen ✗".to_string()
                 };
                 flush_output(self);
-                let line_count = self.output_content.text().split('\n').count();
-                scroll_output_to_bottom(line_count)
+                scroll_output_to_top()
             }
 
             Msg::Clear => {
@@ -688,8 +687,7 @@ impl App {
                     }
                 }
                 if was_dirty {
-                    let line_count = self.output_content.text().split('\n').count();
-                    scroll_output_to_bottom(line_count)
+                    scroll_output_to_top()
                 } else {
                     Task::none()
                 }
@@ -1722,9 +1720,23 @@ impl App {
             "Ausgabe leeren und Status zurücksetzen".to_string(),
         );
 
-        let output_header = row![text("Ausgabe").size(15), clear_btn,]
-            .spacing(8)
-            .align_y(iced::Alignment::Center);
+        let timing_str = if self.display_elapsed_ms > 0 {
+            format!(
+                "Ausführungszeit: {}",
+                format_duration(self.display_elapsed_ms)
+            )
+        } else {
+            "Ausführungszeit: —".to_string()
+        };
+
+        let output_header = row![
+            text("Ausgabe").size(15),
+            clear_btn,
+            horizontal_space(),
+            text(timing_str).size(12),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
 
         let output_te = text_editor(&self.output_content)
             .on_action(Msg::OutputAction)
@@ -2442,17 +2454,18 @@ fn apply_find_selection(
 
 /// Rebuild `text_editor::Content` from the ring buffer.
 ///
-/// If trimming has occurred this run, `TRIM_NOTICE` is prepended to the
-/// displayed text (it is not stored in the ring buffer, so it does not count
-/// against `MAX_LINES`).
+/// Lines are rendered in reverse chronological order so that the newest
+/// entry always appears at the top of the output area.
+/// If trimming has occurred this run, `TRIM_NOTICE` is appended at the
+/// bottom (after the oldest visible line).
 fn flush_output(app: &mut App) {
     let capacity = app.output_lines.len() + usize::from(app.output_trimmed);
     let mut parts: Vec<&str> = Vec::with_capacity(capacity);
+    for line in app.output_lines.iter().rev() {
+        parts.push(line.as_str());
+    }
     if app.output_trimmed {
         parts.push(TRIM_NOTICE);
-    }
-    for line in &app.output_lines {
-        parts.push(line.as_str());
     }
     app.output_content = text_editor::Content::with_text(&parts.join("\n"));
     app.output_dirty = false;
@@ -2675,13 +2688,13 @@ fn scroll_editor_to_line(line: usize) -> Task<Msg> {
     )
 }
 
-/// Produce a [`Task`] that scrolls the output scrollable to the very bottom
-/// so that the most recently appended line is always visible.
-fn scroll_output_to_bottom(line_count: usize) -> Task<Msg> {
-    let y = EDITOR_PADDING_TOP + line_count as f32 * LINE_HEIGHT;
+/// Produce a [`Task`] that scrolls the output scrollable back to the very top
+/// so that the most recently appended line (rendered first in reverse order)
+/// is always visible.
+fn scroll_output_to_top() -> Task<Msg> {
     scrollable::scroll_to(
         scrollable::Id::new("output_scroll"),
-        scrollable::AbsoluteOffset { x: 0.0, y },
+        scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
     )
 }
 
