@@ -51,8 +51,8 @@ use futures::channel::mpsc;
 use futures::FutureExt as _;
 use futures::SinkExt as _;
 use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, pick_list, row, scrollable, stack,
-    text, text_editor, text_input, Space,
+    button, column, container, horizontal_space, image as img_widget, mouse_area, pick_list, row,
+    scrollable, stack, text, text_editor, text_input, Space,
 };
 use iced::{clipboard, Color, Element, Length, Pixels, Subscription, Task};
 use tokio::sync::oneshot;
@@ -100,6 +100,9 @@ const FIND_TEST_GREEN_COLOR: Color = Color { r: 0.0, g: 1.0, b: 0.5, a: 0.40 };
 /// Test highlight color: red.
 const FIND_TEST_RED_COLOR: Color = Color { r: 1.0, g: 0.2, b: 0.2, a: 0.40 };
 
+/// Ghost image shown in the About dialog.
+const GHOST_GIF: &[u8] = include_bytes!("../assets/Ghost.gif");
+
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
     ("Build", "build"),
@@ -133,6 +136,7 @@ enum View {
     Settings,
     Editor,
     Help,
+    About,
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +280,7 @@ struct App {
     find_text: String,
     /// Current replacement string.
     replace_text: String,
-    /// Status message shown in the find/replace panel (e.g. "3 Treffer" or "Nicht gefunden").
+    /// Status message shown in the find/replace panel (e.g. "Treffer 1 von 3 — Zeile 5" or "Keine Treffer").
     find_status: String,
     /// 0-based index of the match that will be acted on by "Nächstes" / "Ersetzen".
     find_current_match: usize,
@@ -495,6 +499,9 @@ enum Msg {
 
     // --- App ---
     Quit,
+
+    /// Open the help PDF with the system default viewer.
+    OpenHelpPdf,
 
     // --- Find highlight color ---
     /// Change the highlight color of the current find match in the editor.
@@ -730,7 +737,7 @@ impl App {
                     if total == 0 {
                         self.find_current_match = 0;
                         self.find_status = if !self.find_text.is_empty() {
-                            "Nicht gefunden".to_string()
+                            "Keine Treffer".to_string()
                         } else {
                             String::new()
                         };
@@ -749,13 +756,8 @@ impl App {
                     let hl_line =
                         self.find_all_match_lines.get(self.find_current_match).copied();
                     self.editor_highlight_line = hl_line;
-                    let tab_title = self
-                        .editor_tabs
-                        .get(self.active_tab)
-                        .map(|t| t.title.as_str())
-                        .unwrap_or_default();
                     self.find_status =
-                        editor_find_status_text(self.find_current_match, total, tab_title, hl_line);
+                        editor_find_status_text(self.find_current_match, total, hl_line);
                     if let Some(line) = hl_line {
                         return scroll_editor_to_line(line);
                     }
@@ -868,7 +870,7 @@ impl App {
                     self.find_status = if self.find_text.is_empty() {
                         String::new()
                     } else {
-                        "Nicht gefunden".to_string()
+                        "Keine Treffer".to_string()
                     };
                     self.editor_highlight_line = None;
                 } else {
@@ -880,12 +882,7 @@ impl App {
                     // matches the visual highlight overlay.
                     let hl_line = self.find_all_match_lines.first().copied();
                     self.editor_highlight_line = hl_line;
-                    let tab_title = self
-                        .editor_tabs
-                        .get(self.active_tab)
-                        .map(|t| t.title.as_str())
-                        .unwrap_or_default();
-                    self.find_status = editor_find_status_text(0, total, tab_title, hl_line);
+                    self.find_status = editor_find_status_text(0, total, hl_line);
                 }
                 if let Some(&line) = self.find_all_match_lines.first() {
                     scroll_editor_to_line(line)
@@ -907,7 +904,7 @@ impl App {
                 }
                 let total = self.find_all_match_lines.len();
                 if total == 0 {
-                    self.find_status = "Nicht gefunden".to_string();
+                    self.find_status = "Keine Treffer".to_string();
                     self.editor_highlight_line = None;
                     return Task::none();
                 }
@@ -923,13 +920,8 @@ impl App {
                 // always in sync with the visual overlay.
                 let hl_line = self.find_all_match_lines.get(self.find_current_match).copied();
                 self.editor_highlight_line = hl_line;
-                let tab_title = self
-                    .editor_tabs
-                    .get(self.active_tab)
-                    .map(|t| t.title.as_str())
-                    .unwrap_or_default();
                 self.find_status =
-                    editor_find_status_text(self.find_current_match, total, tab_title, hl_line);
+                    editor_find_status_text(self.find_current_match, total, hl_line);
                 if let Some(line) = hl_line {
                     scroll_editor_to_line(line)
                 } else {
@@ -944,7 +936,7 @@ impl App {
                 }
                 let total = self.find_all_match_lines.len();
                 if total == 0 {
-                    self.find_status = "Nicht gefunden".to_string();
+                    self.find_status = "Keine Treffer".to_string();
                     self.editor_highlight_line = None;
                     return Task::none();
                 }
@@ -960,13 +952,8 @@ impl App {
                 }
                 let hl_line = self.find_all_match_lines.get(self.find_current_match).copied();
                 self.editor_highlight_line = hl_line;
-                let tab_title = self
-                    .editor_tabs
-                    .get(self.active_tab)
-                    .map(|t| t.title.as_str())
-                    .unwrap_or_default();
                 self.find_status =
-                    editor_find_status_text(self.find_current_match, total, tab_title, hl_line);
+                    editor_find_status_text(self.find_current_match, total, hl_line);
                 if let Some(line) = hl_line {
                     scroll_editor_to_line(line)
                 } else {
@@ -988,7 +975,7 @@ impl App {
                         .map(|(i, _)| i)
                         .collect();
                     if positions.is_empty() {
-                        self.find_status = "Nicht gefunden".to_string();
+                        self.find_status = "Keine Treffer".to_string();
                     } else {
                         let idx = self.find_current_match % positions.len();
                         let pos = positions[idx];
@@ -1004,7 +991,7 @@ impl App {
                         if new_total == 0 {
                             self.find_current_match = 0;
                             self.editor_highlight_line = None;
-                            self.find_status = "Nicht gefunden".to_string();
+                            self.find_status = "Keine Treffer".to_string();
                         } else {
                             self.find_current_match %= new_total;
                             // Reposition cursor at the new current match.
@@ -1037,7 +1024,7 @@ impl App {
                     let full = tab.content.text();
                     let count = full.matches(self.find_text.as_str()).count();
                     if count == 0 {
-                        self.find_status = "Nicht gefunden".to_string();
+                        self.find_status = "Keine Treffer".to_string();
                     } else {
                         let new_text = full.replace(self.find_text.as_str(), self.replace_text.as_str());
                         tab.content = text_editor::Content::with_text(&new_text);
@@ -1077,7 +1064,7 @@ impl App {
                     self.output_find_status = if self.output_find_text.is_empty() {
                         String::new()
                     } else {
-                        "Nicht gefunden".to_string()
+                        "Keine Treffer".to_string()
                     };
                     self.output_highlight_line = None;
                 } else {
@@ -1102,7 +1089,7 @@ impl App {
                     t.matches(self.output_find_text.as_str()).count()
                 };
                 if total == 0 {
-                    self.output_find_status = "Nicht gefunden".to_string();
+                    self.output_find_status = "Keine Treffer".to_string();
                     self.output_highlight_line = None;
                 } else {
                     self.output_find_current_match =
@@ -1131,7 +1118,7 @@ impl App {
                     t.matches(self.output_find_text.as_str()).count()
                 };
                 if total == 0 {
-                    self.output_find_status = "Nicht gefunden".to_string();
+                    self.output_find_status = "Keine Treffer".to_string();
                     self.output_highlight_line = None;
                 } else {
                     self.output_find_current_match =
@@ -1278,6 +1265,36 @@ impl App {
             // --- App ---
             Msg::Quit => iced::exit(),
 
+            Msg::OpenHelpPdf => {
+                // Find PDF next to the executable or in the current directory.
+                let pdf_path = std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| {
+                        let candidate = exe
+                            .parent()?
+                            .join("cargo-gui-bedienungsanleitung.pdf");
+                        if candidate.exists() { Some(candidate) } else { None }
+                    })
+                    .unwrap_or_else(|| {
+                        std::path::PathBuf::from("cargo-gui-bedienungsanleitung.pdf")
+                    });
+
+                #[cfg(target_os = "linux")]
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(&pdf_path)
+                    .spawn();
+                #[cfg(target_os = "macos")]
+                let _ = std::process::Command::new("open")
+                    .arg(&pdf_path)
+                    .spawn();
+                #[cfg(target_os = "windows")]
+                let _ = std::process::Command::new("cmd")
+                    .args(["/c", "start", "", &pdf_path.to_string_lossy().as_ref()])
+                    .spawn();
+
+                Task::none()
+            }
+
             // --- Find highlight color ---
             Msg::SetFindTestColor(c) => {
                 self.find_test_color = c;
@@ -1298,6 +1315,7 @@ impl App {
             View::Settings => self.view_settings(),
             View::Editor => self.view_editor(),
             View::Help => self.view_help(),
+            View::About => self.view_about(),
         };
 
         let topbar = self.view_topbar();
@@ -1492,8 +1510,15 @@ impl App {
 
         let status_text = text(format!("Status: {}", self.status)).size(13);
 
+        let about_btn = hover_tip(
+            button("ℹ Über")
+                .on_press(Msg::NavigateTo(View::About))
+                .padding([5, 10]),
+            "Über Cargo GUI".to_string(),
+        );
+
         container(
-            row![settings_btn, editor_btn, help_btn, quit_btn, status_text]
+            row![settings_btn, editor_btn, help_btn, about_btn, quit_btn, status_text]
                 .spacing(8)
                 .align_y(iced::Alignment::Center)
                 .padding([6, 10]),
@@ -2050,14 +2075,70 @@ impl App {
             .on_press(Msg::NavigateTo(View::Main))
             .padding([5, 10]);
 
+        let pdf_btn = hover_tip(
+            button("📄 PDF öffnen")
+                .on_press(Msg::OpenHelpPdf)
+                .padding([5, 10]),
+            "Bedienungsanleitung als PDF öffnen".to_string(),
+        );
+
         let help_text = text(HELP_TEXT).size(13);
 
         column![
-            row![back_btn, text("Hilfe / Bedienungsanleitung").size(18)].spacing(10),
+            row![back_btn, text("Hilfe / Bedienungsanleitung").size(18), pdf_btn]
+                .spacing(10)
+                .align_y(iced::Alignment::Center),
             scrollable(help_text).height(Length::Fill),
         ]
         .spacing(8)
         .padding(16)
+        .height(Length::Fill)
+        .into()
+    }
+
+    // -----------------------------------------------------------------------
+    // About view
+    // -----------------------------------------------------------------------
+
+    fn view_about(&self) -> Element<'_, Msg> {
+        let back_btn = button("← Zurück")
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10]);
+
+        let ghost = img_widget(iced::widget::image::Handle::from_bytes(GHOST_GIF))
+            .width(Length::Fixed(96.0))
+            .height(Length::Fixed(112.0));
+
+        let ghost_row = container(ghost)
+            .width(Length::Fill)
+            .align_x(iced::Alignment::Center)
+            .padding(iced::Padding { top: 12.0, right: 0.0, bottom: 8.0, left: 0.0 });
+
+        let title = text("Cargo GUI").size(22);
+        let author_label = text("Autor:").size(13);
+        let author_value = text("Jürgen Schneider").size(14);
+        let email_label = text("E-Mail:").size(13);
+        let email_value = text("juergen.sr@t-online.de").size(14);
+
+        let info_col = column![
+            title,
+            row![author_label, author_value].spacing(8).align_y(iced::Alignment::Center),
+            row![email_label, email_value].spacing(8).align_y(iced::Alignment::Center),
+        ]
+        .spacing(8)
+        .padding([0, 16]);
+
+        let centered_info = container(info_col)
+            .width(Length::Fill)
+            .align_x(iced::Alignment::Center);
+
+        column![
+            row![back_btn, text("Über Cargo GUI").size(18)].spacing(10),
+            ghost_row,
+            centered_info,
+        ]
+        .spacing(12)
+        .padding(24)
         .height(Length::Fill)
         .into()
     }
@@ -2408,34 +2489,23 @@ fn scroll_editor_to_line(line: usize) -> Task<Msg> {
 
 /// Build the find-status string for the **editor** panel.
 ///
-/// Format: `"Treffer {current+1} von {total} | {tab_title}:{line+1}"`
-/// Fallback (no line): `"Treffer {current+1} von {total}"`
-fn editor_find_status_text(
-    current: usize,
-    total: usize,
-    tab_title: &str,
-    hl_line: Option<usize>,
-) -> String {
+/// Format: `"Treffer {current+1} von {total} — Zeile {line+1}"`
+/// Fallback (no line): `"Treffer 0 von {total}"`
+fn editor_find_status_text(current: usize, total: usize, hl_line: Option<usize>) -> String {
     match hl_line {
-        Some(line) => format!(
-            "Treffer {} von {} | {}:{}",
-            current + 1,
-            total,
-            tab_title,
-            line + 1
-        ),
-        None => format!("Treffer {} von {}", current + 1, total),
+        Some(line) => format!("Treffer {} von {} \u{2014} Zeile {}", current + 1, total, line + 1),
+        None => format!("Treffer 0 von {}", total),
     }
 }
 
 /// Build the find-status string for the **output** panel (no file context).
 ///
-/// Format: `"Treffer {current+1} von {total} | Zeile {line+1}"`
-/// Fallback (no line): `"Treffer {current+1} von {total}"`
+/// Format: `"Treffer {current+1} von {total} — Zeile {line+1}"`
+/// Fallback (no line): `"Treffer 0 von {total}"`
 fn output_find_status_text(current: usize, total: usize, hl_line: Option<usize>) -> String {
     match hl_line {
-        Some(line) => format!("Treffer {} von {} | Zeile {}", current + 1, total, line + 1),
-        None => format!("Treffer {} von {}", current + 1, total),
+        Some(line) => format!("Treffer {} von {} \u{2014} Zeile {}", current + 1, total, line + 1),
+        None => format!("Treffer 0 von {}", total),
     }
 }
 
@@ -2623,7 +2693,9 @@ Die Inline-Suchleiste öffnet sich unterhalb der Tab-Leiste:
   - \"▼ Ersetzen\"     — Ersetzen-Feld ein-/ausblenden.
   - \"Ersetzen\"       — Aktuelles Vorkommen ersetzen.
   - \"Alle ersetzen\"  — Alle Vorkommen auf einmal ersetzen.
-  - Statusanzeige rechts neben den Buttons (Trefferanzahl oder \"Nicht gefunden\").
+  - Statusanzeige rechts neben den Buttons:
+      «Treffer N von M — Zeile Z» zeigt Treffer N (von M gesamt) auf Zeile Z.
+      «Keine Treffer» wird angezeigt, wenn kein Ergebnis gefunden wurde.
   - Alle Treffer werden dezent markiert; der aktuelle Treffer wird stärker hervorgehoben.
 
 ## Kontextmenü (Rechtsklick)
@@ -2643,7 +2715,8 @@ Die Inline-Suchleiste öffnet sich unterhalb der Tab-Leiste:
 #[cfg(test)]
 mod tests {
     use super::{
-        byte_offset_to_position, collect_all_match_lines, find_match_byte_offset, format_duration,
+        byte_offset_to_position, collect_all_match_lines, editor_find_status_text,
+        find_match_byte_offset, format_duration, output_find_status_text,
     };
 
     #[test]
@@ -3003,19 +3076,22 @@ mod tests {
 
     /// The find_status must reference lines from find_all_match_lines so it is
     /// always in sync with the visual highlight overlay.
+    /// Format: "Treffer N von M — Zeile Z"
     #[test]
     fn find_status_uses_match_lines() {
         let text = "alpha\nbeta\nalpha\ngamma";
         let lines = collect_all_match_lines(text, "alpha");
         assert_eq!(lines, vec![0, 2]);
         let total = lines.len();
-        let tab = "test.rs";
-        // match index 0 → "Treffer 1 von 2 | test.rs:1"
-        let s0 = format!("Treffer 1 von {total} | {}:{}", tab, lines[0] + 1);
-        assert_eq!(s0, "Treffer 1 von 2 | test.rs:1");
-        // match index 1 → "Treffer 2 von 2 | test.rs:3"
-        let s1 = format!("Treffer 2 von {total} | {}:{}", tab, lines[1] + 1);
-        assert_eq!(s1, "Treffer 2 von 2 | test.rs:3");
+        // match index 0 → "Treffer 1 von 2 — Zeile 1"
+        let s0 = editor_find_status_text(0, total, Some(lines[0]));
+        assert_eq!(s0, "Treffer 1 von 2 \u{2014} Zeile 1");
+        // match index 1 → "Treffer 2 von 2 — Zeile 3"
+        let s1 = editor_find_status_text(1, total, Some(lines[1]));
+        assert_eq!(s1, "Treffer 2 von 2 \u{2014} Zeile 3");
+        // Output panel: same format, same results
+        let o0 = output_find_status_text(0, total, Some(lines[0]));
+        assert_eq!(o0, "Treffer 1 von 2 \u{2014} Zeile 1");
     }
 
     // --- Arrow-key navigation wraps correctly ---
@@ -3072,26 +3148,16 @@ mod tests {
         let lines = collect_all_match_lines(new_tab_text, needle);
         assert_eq!(lines, vec![0, 2]);
         let total = lines.len();
-        let tab_title = "test.rs";
 
         // User was at match index 1 before switching tabs.
         let prev_current_match = 1usize;
         // Clamp: 1 < 2, so index stays at 1.
         let find_current_match = prev_current_match.min(total - 1);
         let hl_line = lines.get(find_current_match).copied();
-        let find_status = match hl_line {
-            Some(line) => format!(
-                "Treffer {} von {} | {}:{}",
-                find_current_match + 1,
-                total,
-                tab_title,
-                line + 1
-            ),
-            None => format!("Treffer {} von {}", find_current_match + 1, total),
-        };
+        let find_status = editor_find_status_text(find_current_match, total, hl_line);
         assert_eq!(find_current_match, 1);
         assert_eq!(hl_line, Some(2));
-        assert_eq!(find_status, "Treffer 2 von 2 | test.rs:3");
+        assert_eq!(find_status, "Treffer 2 von 2 \u{2014} Zeile 3");
     }
 
     /// When find_current_match exceeds the new tab's match count, it must be
@@ -3103,30 +3169,20 @@ mod tests {
         let lines = collect_all_match_lines(new_tab_text, needle);
         assert_eq!(lines, vec![0]);
         let total = lines.len();
-        let tab_title = "test.rs";
 
         // User was at match index 3 in a tab with many matches.
         let prev_current_match = 3usize;
         // Clamp: min(3, total-1) = min(3, 0) = 0, the only valid index.
         let find_current_match = prev_current_match.min(total - 1);
         let hl_line = lines.get(find_current_match).copied();
-        let find_status = match hl_line {
-            Some(line) => format!(
-                "Treffer {} von {} | {}:{}",
-                find_current_match + 1,
-                total,
-                tab_title,
-                line + 1
-            ),
-            None => format!("Treffer {} von {}", find_current_match + 1, total),
-        };
+        let find_status = editor_find_status_text(find_current_match, total, hl_line);
         assert_eq!(find_current_match, 0);
         assert_eq!(hl_line, Some(0));
-        assert_eq!(find_status, "Treffer 1 von 1 | test.rs:1");
+        assert_eq!(find_status, "Treffer 1 von 1 \u{2014} Zeile 1");
     }
 
     /// When switching to a different tab that has matches and find_current_match
-    /// is 0, find_status shows "Treffer 1 von N | file:K" for the first match.
+    /// is 0, find_status shows "Treffer 1 von N — Zeile K" for the first match.
     #[test]
     fn tab_select_updates_find_status_with_matches() {
         // Simulate the new-tab text and the recomputed match list.
@@ -3135,30 +3191,20 @@ mod tests {
         let lines = collect_all_match_lines(new_tab_text, needle);
         assert_eq!(lines, vec![0, 2]);
         let total = lines.len();
-        let tab_title = "test.rs";
 
         // Mimic what TabSelect now does: clamp current_match (here 0 → stays 0),
         // recompute lines, then derive find_status from lines[0].
         let prev_current_match = 0usize;
         let find_current_match = prev_current_match.min(total - 1);
         let hl_line = lines.get(find_current_match).copied();
-        let find_status = match hl_line {
-            Some(line) => format!(
-                "Treffer {} von {} | {}:{}",
-                find_current_match + 1,
-                total,
-                tab_title,
-                line + 1
-            ),
-            None => format!("Treffer {} von {}", find_current_match + 1, total),
-        };
+        let find_status = editor_find_status_text(find_current_match, total, hl_line);
         assert_eq!(find_current_match, 0);
         assert_eq!(hl_line, Some(0));
-        assert_eq!(find_status, "Treffer 1 von 2 | test.rs:1");
+        assert_eq!(find_status, "Treffer 1 von 2 \u{2014} Zeile 1");
     }
 
     /// When switching to a different tab that has NO matches, find_status must
-    /// be set to "Nicht gefunden" (and highlight must be cleared).
+    /// be set to "Keine Treffer" (and highlight must be cleared).
     #[test]
     fn tab_select_updates_find_status_no_matches() {
         let new_tab_text = "no hits here";
@@ -3170,13 +3216,13 @@ mod tests {
         let find_current_match = 0usize;
         let editor_highlight_line: Option<usize> = None;
         let find_status = if !needle.is_empty() {
-            "Nicht gefunden".to_string()
+            "Keine Treffer".to_string()
         } else {
             String::new()
         };
         assert_eq!(find_current_match, 0);
         assert_eq!(editor_highlight_line, None);
-        assert_eq!(find_status, "Nicht gefunden");
+        assert_eq!(find_status, "Keine Treffer");
     }
 
     /// Clicking the already-active tab must NOT reset find_current_match.
@@ -3270,5 +3316,125 @@ mod tests {
         let is_always_inside_stack = true; // enforced by the unconditional stack![]
         assert!(is_always_inside_stack,
             "main_col must be wrapped in a stable stack, never the bare root");
+    }
+
+    // -----------------------------------------------------------------------
+    // New tests: search status format (Treffer N von M — Zeile Z / Keine Treffer)
+    // -----------------------------------------------------------------------
+
+    /// Status with zero matches: "Keine Treffer" (not "Nicht gefunden").
+    #[test]
+    fn status_zero_matches_is_keine_treffer() {
+        let text = "hello world";
+        let lines = collect_all_match_lines(text, "xyz");
+        assert!(lines.is_empty());
+        // Handler produces "Keine Treffer" for non-empty search with no results.
+        let status = if !lines.is_empty() {
+            editor_find_status_text(0, lines.len(), lines.first().copied())
+        } else {
+            "Keine Treffer".to_string()
+        };
+        assert_eq!(status, "Keine Treffer");
+    }
+
+    /// Status with exactly one match uses correct format.
+    #[test]
+    fn status_one_match_format() {
+        let text = "only one needle here";
+        let lines = collect_all_match_lines(text, "needle");
+        assert_eq!(lines, vec![0]);
+        let status = editor_find_status_text(0, 1, Some(lines[0]));
+        assert_eq!(status, "Treffer 1 von 1 \u{2014} Zeile 1");
+    }
+
+    /// Status with many matches — first and last positions are correct.
+    #[test]
+    fn status_many_matches_format() {
+        let text = "x\nx\nx\nx\nx";
+        let lines = collect_all_match_lines(text, "x");
+        assert_eq!(lines.len(), 5);
+        // First match
+        let s0 = editor_find_status_text(0, 5, Some(lines[0]));
+        assert_eq!(s0, "Treffer 1 von 5 \u{2014} Zeile 1");
+        // Last match (line 5)
+        let s4 = editor_find_status_text(4, 5, Some(lines[4]));
+        assert_eq!(s4, "Treffer 5 von 5 \u{2014} Zeile 5");
+    }
+
+    /// When hl_line is None (defensive: out-of-range or position not found),
+    /// status falls back to "Treffer 0 von N".
+    #[test]
+    fn status_no_active_selection_falls_back() {
+        let status = editor_find_status_text(0, 5, None);
+        assert_eq!(status, "Treffer 0 von 5");
+        let status2 = output_find_status_text(2, 10, None);
+        assert_eq!(status2, "Treffer 0 von 10");
+    }
+
+    /// Line number in status matches the line of the highlighted match.
+    #[test]
+    fn status_line_number_matches_highlight() {
+        let text = "line0\nline1\nneedle\nline3\nneedle";
+        let lines = collect_all_match_lines(text, "needle");
+        // Matches on lines 2 and 4.
+        assert_eq!(lines, vec![2, 4]);
+        let s0 = editor_find_status_text(0, 2, Some(lines[0]));
+        assert!(s0.contains("Zeile 3"), "first match must show Zeile 3, got: {s0}");
+        let s1 = editor_find_status_text(1, 2, Some(lines[1]));
+        assert!(s1.contains("Zeile 5"), "second match must show Zeile 5, got: {s1}");
+    }
+
+    /// Multiple matches on the same line — current/total still reflects exact position.
+    #[test]
+    fn status_multiple_matches_same_line() {
+        let text = "ab ab ab";
+        let lines = collect_all_match_lines(text, "ab");
+        // All 3 matches are on line 0.
+        assert_eq!(lines, vec![0, 0, 0]);
+        let s0 = editor_find_status_text(0, 3, Some(0));
+        assert_eq!(s0, "Treffer 1 von 3 \u{2014} Zeile 1");
+        let s1 = editor_find_status_text(1, 3, Some(0));
+        assert_eq!(s1, "Treffer 2 von 3 \u{2014} Zeile 1");
+        let s2 = editor_find_status_text(2, 3, Some(0));
+        assert_eq!(s2, "Treffer 3 von 3 \u{2014} Zeile 1");
+    }
+
+    /// Navigation: changing search term resets to match 0.
+    #[test]
+    fn status_term_change_resets_to_first_match() {
+        // Simulate FindTextChanged: find_current_match = 0, new matches computed.
+        let text = "alpha\nbeta\nalpha";
+        let lines_alpha = collect_all_match_lines(text, "alpha");
+        assert_eq!(lines_alpha, vec![0, 2]);
+        // New search term with fewer matches:
+        let lines_beta = collect_all_match_lines(text, "beta");
+        assert_eq!(lines_beta, vec![1]);
+        // Status after term change: current=0, total=1, line=lines_beta[0]=1 → Zeile 2
+        let status = editor_find_status_text(0, lines_beta.len(), Some(lines_beta[0]));
+        assert_eq!(status, "Treffer 1 von 1 \u{2014} Zeile 2");
+    }
+
+    /// Regression: "1/32 -- Zeile 232" style format cannot appear in new code.
+    /// The separator is always " — " (em dash) and counts are always integers.
+    #[test]
+    fn regression_no_slash_format_in_status() {
+        let status = editor_find_status_text(0, 32, Some(231));
+        // Must NOT contain "/" or "--" separators.
+        assert!(!status.contains('/'), "status must not use '/' separator: {status}");
+        assert!(!status.contains("--"), "status must not use '--': {status}");
+        // Must use the em dash.
+        assert!(status.contains('\u{2014}'), "status must use em dash: {status}");
+        assert_eq!(status, "Treffer 1 von 32 \u{2014} Zeile 232");
+    }
+
+    /// Output panel status uses same format as editor panel.
+    #[test]
+    fn output_find_status_same_format() {
+        let status = output_find_status_text(4, 10, Some(99));
+        assert_eq!(status, "Treffer 5 von 10 \u{2014} Zeile 100");
+        let no_match = output_find_status_text(0, 0, None);
+        // 0 total means "Keine Treffer" from handler, but function returns "Treffer 0 von 0"
+        // when called directly with total=0, None.
+        assert_eq!(no_match, "Treffer 0 von 0");
     }
 }
