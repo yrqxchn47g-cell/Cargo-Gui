@@ -111,25 +111,25 @@ const GHOST_WIDTH: f32 = 96.0;
 const GHOST_HEIGHT: f32 = 112.0;
 
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
-const COMMANDS_LEFT: &[(&str, &str)] = &[
-    ("Build", "build"),
-    ("Build --release", "build --release"),
-    ("Run", "run"),
-    ("Run --release", "run --release"),
-    ("Test", "test"),
-    ("Check", "check"),
-    ("Fmt", "fmt"),
-    ("Clippy", "clippy"),
+const COMMANDS_LEFT: &[(&str, &str, &str)] = &[
+    ("Build", "build", "cargo build — Kompiliert das Projekt"),
+    ("Build --release", "build --release", "cargo build --release — Kompiliert optimiert (Release-Modus)"),
+    ("Run", "run", "cargo run — Kompiliert und startet das Projekt"),
+    ("Run --release", "run --release", "cargo run --release — Startet die optimierte Release-Version"),
+    ("Test", "test", "cargo test — Führt alle Tests aus"),
+    ("Check", "check", "cargo check — Prüft Syntax ohne vollständige Kompilierung"),
+    ("Fmt", "fmt", "cargo fmt — Formatiert den Quellcode automatisch"),
+    ("Clippy", "clippy", "cargo clippy — Führt den Linter aus (Code-Qualitätsprüfung)"),
 ];
 
 /// Cargo commands shown in the right column of the "Cargo Befehle" grid.
-const COMMANDS_RIGHT: &[(&str, &str)] = &[
-    ("Update", "update"),
-    ("New", "new"),
-    ("Init", "init"),
-    ("Clean", "clean"),
-    ("Doc", "doc"),
-    ("Bench", "bench"),
+const COMMANDS_RIGHT: &[(&str, &str, &str)] = &[
+    ("Update", "update", "cargo update — Aktualisiert alle Abhängigkeiten in Cargo.lock"),
+    ("New", "new", "cargo new — Neues Rust-Projekt anlegen"),
+    ("Init", "init", "cargo init — Aktuelles Verzeichnis als Rust-Projekt initialisieren"),
+    ("Clean", "clean", "cargo clean — Build-Artefakte und Target-Verzeichnis löschen"),
+    ("Doc", "doc", "cargo doc — API-Dokumentation für das Projekt generieren"),
+    ("Bench", "bench", "cargo bench — Benchmarks ausführen"),
 ];
 
 // ---------------------------------------------------------------------------
@@ -493,6 +493,8 @@ enum Msg {
     DefaultPathChanged(String),
     /// User selected a new theme from the pick-list.
     ThemeChanged(AppTheme),
+    /// Increase or decrease the button font size by the given delta (+1 / -1).
+    ButtonFontSizeChanged(f32),
     /// Reset all settings to their default values and persist.
     ResetSettings,
 
@@ -1245,6 +1247,13 @@ impl App {
                 Task::none()
             }
 
+            Msg::ButtonFontSizeChanged(delta) => {
+                let new_size = (self.config.button_font_size + delta).clamp(10.0, 24.0);
+                self.config.button_font_size = new_size;
+                self.config.save();
+                Task::none()
+            }
+
             Msg::ResetSettings => {
                 self.config = Config::default();
                 self.config.save();
@@ -1470,7 +1479,10 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_topbar(&self) -> Element<'_, Msg> {
-        let menu_btn = hover_tip(button("☰").padding([4, 10]), "Hauptmenü öffnen".to_string());
+        let menu_btn = hover_tip(
+            button(text("☰").size(self.config.button_font_size)).padding([4, 10]),
+            "Hauptmenü — Schnellzugriff auf Ansichten und Funktionen".to_string(),
+        );
 
         let title = text("Cargo GUI").size(20);
 
@@ -1490,39 +1502,40 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_footer(&self) -> Element<'_, Msg> {
+        let fs = self.config.button_font_size;
         let settings_btn = hover_tip(
-            button("⚙ Einstellungen")
+            button(text("⚙ Einstellungen").size(fs))
                 .on_press(Msg::NavigateTo(View::Settings))
                 .padding([5, 10]),
-            "Einstellungen öffnen".to_string(),
+            "Einstellungen öffnen — Standard-Pfad, Theme und Button-Schriftgröße festlegen".to_string(),
         );
 
         let editor_btn = hover_tip(
-            button("✏ Editor")
+            button(text("✏ Editor").size(fs))
                 .on_press(Msg::NavigateTo(View::Editor))
                 .padding([5, 10]),
-            "Datei-Editor öffnen".to_string(),
+            "Datei-Editor öffnen — Texte bearbeiten, Tabs verwalten, Suchen/Ersetzen".to_string(),
         );
 
         let help_btn = hover_tip(
-            button("? Hilfe")
+            button(text("? Hilfe").size(fs))
                 .on_press(Msg::NavigateTo(View::Help))
                 .padding([5, 10]),
-            "Bedienungsanleitung öffnen".to_string(),
+            "Bedienungsanleitung öffnen — alle Funktionen im Überblick".to_string(),
         );
 
         let quit_btn = hover_tip(
-            button("✕ Beenden").on_press(Msg::Quit).padding([5, 10]),
-            "Anwendung beenden".to_string(),
+            button(text("✕ Beenden").size(fs)).on_press(Msg::Quit).padding([5, 10]),
+            "Anwendung beenden (alle ungespeicherten Änderungen gehen verloren)".to_string(),
         );
 
         let status_text = text(format!("Status: {}", self.status)).size(13);
 
         let about_btn = hover_tip(
-            button("ℹ Über")
+            button(text("ℹ Über").size(fs))
                 .on_press(Msg::NavigateTo(View::About))
                 .padding([5, 10]),
-            "Über Cargo GUI".to_string(),
+            "Über Cargo GUI — Versionsinformationen und Kontakt".to_string(),
         );
 
         container(
@@ -1541,23 +1554,24 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_main(&self) -> Element<'_, Msg> {
+        let fs = self.config.button_font_size;
         // -- Project directory row --
         let path_input = text_input("Projektpfad…", &self.project_path)
             .on_input(Msg::PathChanged)
             .padding(5);
 
         let browse_btn = hover_tip(
-            button("📂 Durchsuchen")
+            button(text("📂 Durchsuchen").size(fs))
                 .on_press(Msg::BrowsePath)
                 .padding([5, 10]),
-            "Projektordner auswählen".to_string(),
+            "Projektordner auswählen — öffnet einen nativen Ordnerauswahl-Dialog".to_string(),
         );
 
         let set_default_btn = hover_tip(
-            button("Als Start")
+            button(text("Als Start").size(fs))
                 .on_press(Msg::SetAsDefault)
                 .padding([5, 10]),
-            "Diesen Pfad als Standardpfad speichern".to_string(),
+            "Diesen Pfad als Standard-Projektpfad speichern (wird beim nächsten Start geladen)".to_string(),
         );
 
         let path_buttons_row = row![browse_btn, set_default_btn,]
@@ -1579,17 +1593,17 @@ impl App {
             .padding(5);
 
         let run_btn = hover_tip(
-            button("▶ Ausführen")
+            button(text("▶ Ausführen").size(fs))
                 .on_press_maybe((!self.running).then_some(Msg::Run))
                 .padding([5, 10]),
-            "Cargo-Befehl ausführen".to_string(),
+            "Cargo-Befehl ausführen — startet den im Argumentfeld eingetragenen Befehl".to_string(),
         );
 
         let stop_btn = hover_tip(
-            button("■ Stop")
+            button(text("■ Stop").size(fs))
                 .on_press_maybe(self.running.then_some(Msg::Stop))
                 .padding([5, 10]),
-            "Laufenden Prozess abbrechen".to_string(),
+            "Laufenden Cargo-Prozess abbrechen".to_string(),
         );
 
         let args_row = row![
@@ -1609,13 +1623,13 @@ impl App {
             .padding(5);
 
         let cargo_new_btn = hover_tip(
-            button("cargo new")
+            button(text("cargo new").size(fs))
                 .on_press_maybe(
                     (!self.running && !self.new_project_name.trim().is_empty())
                         .then_some(Msg::RunCargoNew),
                 )
                 .padding([5, 10]),
-            "Neues Cargo-Projekt anlegen".to_string(),
+            "Neues Cargo-Projekt mit dem eingetragenen Namen anlegen (cargo new <name>)".to_string(),
         );
 
         let new_row = row![
@@ -1629,9 +1643,9 @@ impl App {
 
         // -- Cargo Befehle grid (2 columns) --
         // Helper closure: builds one command button with expected/elapsed timing.
-        let make_cmd_btn = |(label, cmd): &(&str, &str)| {
+        let make_cmd_btn = |(label, cmd, tip_text): &(&str, &str, &str)| {
             let cmd_str = cmd.to_string();
-            let tip = format!("cargo {cmd}");
+            let tip = tip_text.to_string();
             let duration_label = self
                 .last_durations
                 .get(&cmd_str)
@@ -1646,7 +1660,7 @@ impl App {
                 format!("{label} (est:{duration_label})")
             };
             hover_tip(
-                button(text(btn_label).size(11))
+                button(text(btn_label).size(fs))
                     .on_press_maybe((!self.running).then_some(Msg::RunCommand(cmd_str)))
                     .width(Length::Fill)
                     .padding([5, 8]),
@@ -1668,7 +1682,7 @@ impl App {
 
         // -- Output section --
         let clear_btn = hover_tip(
-            button("Ausgabe löschen")
+            button(text("Ausgabe löschen").size(fs))
                 .on_press(Msg::Clear)
                 .padding([5, 10]),
             "Ausgabe leeren und Status zurücksetzen".to_string(),
@@ -1766,8 +1780,9 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_settings(&self) -> Element<'_, Msg> {
+        let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button("← Zurück")
+            button(text("← Zurück").size(fs))
                 .on_press(Msg::NavigateTo(View::Main))
                 .padding([5, 10]),
             "Zurück zur Hauptansicht".to_string(),
@@ -1779,10 +1794,10 @@ impl App {
             .padding(5);
 
         let restore_btn = hover_tip(
-            button("Standard-Pfad laden")
+            button(text("Standard-Pfad laden").size(fs))
                 .on_press(Msg::RestoreDefault)
                 .padding([5, 10]),
-            "Standard-Pfad in das Projektverzeichnis-Feld laden".to_string(),
+            "Standard-Projektpfad in das Projektverzeichnis-Feld übernehmen".to_string(),
         );
 
         let default_path_row = column![
@@ -1805,12 +1820,34 @@ impl App {
             .spacing(6)
             .align_y(iced::Alignment::Center);
 
+        // -- Button font size row --
+        let font_dec_btn = hover_tip(
+            button(text("−").size(16))
+                .on_press_maybe((fs > 10.0).then_some(Msg::ButtonFontSizeChanged(-1.0)))
+                .padding([4, 10]),
+            "Schriftgröße der Buttons verkleinern".to_string(),
+        );
+        let font_inc_btn = hover_tip(
+            button(text("+").size(16))
+                .on_press_maybe((fs < 24.0).then_some(Msg::ButtonFontSizeChanged(1.0)))
+                .padding([4, 10]),
+            "Schriftgröße der Buttons vergrößern".to_string(),
+        );
+        let font_size_row = row![
+            text("Button-Schriftgröße:").size(13).width(160),
+            font_dec_btn,
+            text(format!("{} pt", fs as u8)).size(13).width(40),
+            font_inc_btn,
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+
         // -- Reset button --
         let reset_btn = hover_tip(
-            button("Standard zurück")
+            button(text("Standard zurück").size(fs))
                 .on_press(Msg::ResetSettings)
                 .padding([5, 10]),
-            "Alle Einstellungen auf Standardwerte zurücksetzen".to_string(),
+            "Alle Einstellungen auf Standardwerte zurücksetzen und speichern".to_string(),
         );
 
         // Config file path hint
@@ -1824,6 +1861,7 @@ impl App {
             row![back_btn, text("Einstellungen").size(18)].spacing(10),
             default_path_row,
             theme_row,
+            font_size_row,
             reset_btn,
             text(config_hint).size(11),
         ]
@@ -1838,21 +1876,22 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_editor(&self) -> Element<'_, Msg> {
+        let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button("← Zurück")
+            button(text("← Zurück").size(fs))
                 .on_press(Msg::NavigateTo(View::Main))
                 .padding([5, 10]),
             "Zurück zur Hauptansicht".to_string(),
         );
 
         let new_tab_btn = hover_tip(
-            button("+ Neu").on_press(Msg::TabNew).padding([5, 10]),
-            "Neuen leeren Tab öffnen".to_string(),
+            button(text("+ Neu").size(fs)).on_press(Msg::TabNew).padding([5, 10]),
+            "Neuen leeren Tab im Editor öffnen".to_string(),
         );
 
         let open_btn = hover_tip(
-            button("📂 Öffnen").on_press(Msg::OpenFile).padding([5, 10]),
-            "Datei laden (öffnet nativen Dateiauswahl-Dialog)".to_string(),
+            button(text("📂 Öffnen").size(fs)).on_press(Msg::OpenFile).padding([5, 10]),
+            "Datei öffnen — öffnet einen nativen Dateiauswahl-Dialog".to_string(),
         );
 
         let find_replace_toggle_label = if self.find_replace_open {
@@ -1861,10 +1900,10 @@ impl App {
             "🔍 Suchen"
         };
         let find_btn = hover_tip(
-            button(find_replace_toggle_label)
+            button(text(find_replace_toggle_label).size(fs))
                 .on_press(Msg::ToggleFindReplace)
                 .padding([5, 10]),
-            "Inline-Suchleiste ein-/ausblenden (Ctrl+F / Ctrl+H)".to_string(),
+            "Inline-Suchleiste ein-/ausblenden (Ctrl+F = Suchen, Ctrl+H = Suchen+Ersetzen)".to_string(),
         );
 
         // -- Tab bar --
@@ -1920,11 +1959,11 @@ impl App {
             );
             let next_btn = hover_tip(
                 button("▼").on_press(Msg::FindNext).padding([4, 8]),
-                "Nächstes Vorkommen (Enter)".to_string(),
+                "Zum nächsten Treffer springen (Enter)".to_string(),
             );
             let prev_btn = hover_tip(
                 button("▲").on_press(Msg::FindPrev).padding([4, 8]),
-                "Vorheriges Vorkommen (Shift+Enter)".to_string(),
+                "Zum vorherigen Treffer springen (Shift+Enter)".to_string(),
             );
             let toggle_replace_label = if self.find_show_replace { "▲ Ersetzen" } else { "▼ Ersetzen" };
             let toggle_replace_btn = hover_tip(
@@ -1938,7 +1977,7 @@ impl App {
                     .on_press(Msg::CloseInlineFind)
                     .padding([4, 6])
                     .style(button::danger),
-                "Suchen-Leiste schließen (Esc)".to_string(),
+                "Suchleiste schließen (Esc)".to_string(),
             );
             let status_text = text(self.find_status.as_str()).size(12);
 
@@ -1971,13 +2010,13 @@ impl App {
                 );
                 let replace_btn = hover_tip(
                     button("Ersetzen").on_press(Msg::ReplaceOne).padding([4, 8]),
-                    "Aktuelles Vorkommen ersetzen".to_string(),
+                    "Aktuelles Vorkommen durch den Ersetzungstext ersetzen".to_string(),
                 );
                 let replace_all_btn = hover_tip(
                     button("Alle ersetzen")
                         .on_press(Msg::ReplaceAll)
                         .padding([4, 8]),
-                    "Alle Vorkommen auf einmal ersetzen".to_string(),
+                    "Alle Vorkommen im aktiven Tab auf einmal ersetzen".to_string(),
                 );
                 let replace_row = row![
                     text("↺").size(12),
@@ -2082,18 +2121,19 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_help(&self) -> Element<'_, Msg> {
+        let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button("← Zurück")
+            button(text("← Zurück").size(fs))
                 .on_press(Msg::NavigateTo(View::Main))
                 .padding([5, 10]),
             "Zurück zur Hauptansicht".to_string(),
         );
 
         let pdf_btn = hover_tip(
-            button("📄 PDF öffnen")
+            button(text("📄 PDF öffnen").size(fs))
                 .on_press(Msg::OpenHelpPdf)
                 .padding([5, 10]),
-            "Bedienungsanleitung als PDF öffnen".to_string(),
+            "Bedienungsanleitung als PDF-Dokument öffnen".to_string(),
         );
 
         let help_text = text(HELP_TEXT).size(13);
@@ -2115,8 +2155,9 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_about(&self) -> Element<'_, Msg> {
+        let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button("← Zurück")
+            button(text("← Zurück").size(fs))
                 .on_press(Msg::NavigateTo(View::Main))
                 .padding([5, 10]),
             "Zurück zur Hauptansicht".to_string(),
@@ -2680,8 +2721,13 @@ Während ein Cargo-Prozess läuft, können Sie ihn mit \"■ Stop\" abbrechen.
 
 ## Einstellungen
 Unter \"⚙ Einstellungen\" können Sie den Standard-Projektpfad festlegen,
-das Theme auswählen und Einstellungen zurücksetzen.
+das Theme auswählen, die Button-Schriftgröße anpassen und Einstellungen zurücksetzen.
 Einstellungen werden sofort automatisch gespeichert.
+
+Button-Schriftgröße:
+  Mit den Schaltflächen \"−\" und \"+\" lässt sich die Schriftgröße der Buttons
+  stufenweise anpassen (Bereich: 10–24 pt, Standard: 13 pt).
+  Die Einstellung wird gespeichert und beim nächsten Start wieder angewendet.
 
 Verfügbare Themes:
   Hell (Light) · Dunkel (Dark) · Dracula · Nord · Solarized Light/Dark
