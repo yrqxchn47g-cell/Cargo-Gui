@@ -106,6 +106,9 @@ const GHOST_GIF: &[u8] = include_bytes!("../assets/Ghost.gif");
 /// Filename of the help PDF distributed alongside the application.
 const HELP_PDF_FILENAME: &str = "cargo-gui-bedienungsanleitung.pdf";
 
+/// Visible width (px) of the "Argumente" text-input field (≈ 16 characters).
+const ARGS_INPUT_WIDTH: u16 = 128;
+
 /// Display dimensions of the Ghost image in the About dialog.
 const GHOST_WIDTH: f32 = 96.0;
 const GHOST_HEIGHT: f32 = 112.0;
@@ -1610,7 +1613,8 @@ impl App {
         let args_input = text_input("z.B. build --release", &self.cargo_args)
             .on_input(Msg::ArgsChanged)
             .on_submit(Msg::Run)
-            .padding(5);
+            .padding(5)
+            .width(ARGS_INPUT_WIDTH);
 
         let run_btn = hover_tip(
             button(text("▶ Ausführen").size(fs))
