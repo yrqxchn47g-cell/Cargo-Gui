@@ -1470,7 +1470,7 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_topbar(&self) -> Element<'_, Msg> {
-        let menu_btn = hover_tip(button("☰").padding([4, 10]), "Menü".to_string());
+        let menu_btn = hover_tip(button("☰").padding([4, 10]), "Hauptmenü öffnen".to_string());
 
         let title = text("Cargo GUI").size(20);
 
@@ -1684,7 +1684,7 @@ impl App {
             // Keep output line height consistent with LINE_HEIGHT for correct
             // zebra-stripe and highlight-band alignment.
             .line_height(Pixels(LINE_HEIGHT));
-        let output_line_count = self.output_content.text().lines().count().max(1);
+        let output_line_count = self.output_content.text().split('\n').count().max(1);
         let output_gutter = make_gutter(output_line_count);
         let output_hl = make_highlight_layer(self.output_highlight_line);
         let zebra = make_zebra_overlay(output_line_count);
@@ -1766,9 +1766,12 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_settings(&self) -> Element<'_, Msg> {
-        let back_btn = button("← Zurück")
-            .on_press(Msg::NavigateTo(View::Main))
-            .padding([5, 10]);
+        let back_btn = hover_tip(
+            button("← Zurück")
+                .on_press(Msg::NavigateTo(View::Main))
+                .padding([5, 10]),
+            "Zurück zur Hauptansicht".to_string(),
+        );
 
         // -- Default path row --
         let default_path_input = text_input("Standard-Projektpfad…", &self.config.default_path)
@@ -1849,7 +1852,7 @@ impl App {
 
         let open_btn = hover_tip(
             button("📂 Öffnen").on_press(Msg::OpenFile).padding([5, 10]),
-            "Datei öffnen".to_string(),
+            "Datei laden (öffnet nativen Dateiauswahl-Dialog)".to_string(),
         );
 
         let find_replace_toggle_label = if self.find_replace_open {
@@ -1861,7 +1864,7 @@ impl App {
             button(find_replace_toggle_label)
                 .on_press(Msg::ToggleFindReplace)
                 .padding([5, 10]),
-            "Suchen & Ersetzen-Panel ein-/ausblenden (Ctrl+F)".to_string(),
+            "Inline-Suchleiste ein-/ausblenden (Ctrl+F / Ctrl+H)".to_string(),
         );
 
         // -- Tab bar --
@@ -1974,7 +1977,7 @@ impl App {
                     button("Alle ersetzen")
                         .on_press(Msg::ReplaceAll)
                         .padding([4, 8]),
-                    "Alle Vorkommen ersetzen".to_string(),
+                    "Alle Vorkommen auf einmal ersetzen".to_string(),
                 );
                 let replace_row = row![
                     text("↺").size(12),
@@ -2000,7 +2003,7 @@ impl App {
         // -- Active editor (wrapped for right-click context menu) --
         let editor_widget: Element<'_, Msg> =
             if let Some(tab) = self.editor_tabs.get(self.active_tab) {
-                let line_count = tab.content.text().lines().count().max(1);
+                let line_count = tab.content.text().split('\n').count().max(1);
                 let gutter = make_gutter(line_count);
                 let highlight = make_multi_highlight_layer(
                     &self.find_all_match_lines,
@@ -2079,9 +2082,12 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_help(&self) -> Element<'_, Msg> {
-        let back_btn = button("← Zurück")
-            .on_press(Msg::NavigateTo(View::Main))
-            .padding([5, 10]);
+        let back_btn = hover_tip(
+            button("← Zurück")
+                .on_press(Msg::NavigateTo(View::Main))
+                .padding([5, 10]),
+            "Zurück zur Hauptansicht".to_string(),
+        );
 
         let pdf_btn = hover_tip(
             button("📄 PDF öffnen")
@@ -2109,9 +2115,12 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_about(&self) -> Element<'_, Msg> {
-        let back_btn = button("← Zurück")
-            .on_press(Msg::NavigateTo(View::Main))
-            .padding([5, 10]);
+        let back_btn = hover_tip(
+            button("← Zurück")
+                .on_press(Msg::NavigateTo(View::Main))
+                .padding([5, 10]),
+            "Zurück zur Hauptansicht".to_string(),
+        );
 
         let ghost = img_widget(iced::widget::image::Handle::from_bytes(GHOST_GIF))
             .width(Length::Fixed(GHOST_WIDTH))
