@@ -103,6 +103,13 @@ const FIND_TEST_RED_COLOR: Color = Color { r: 1.0, g: 0.2, b: 0.2, a: 0.40 };
 /// Ghost image shown in the About dialog.
 const GHOST_GIF: &[u8] = include_bytes!("../assets/Ghost.gif");
 
+/// Filename of the help PDF distributed alongside the application.
+const HELP_PDF_FILENAME: &str = "cargo-gui-bedienungsanleitung.pdf";
+
+/// Display dimensions of the Ghost image in the About dialog.
+const GHOST_WIDTH: f32 = 96.0;
+const GHOST_HEIGHT: f32 = 112.0;
+
 /// Cargo commands shown in the left column of the "Cargo Befehle" grid.
 const COMMANDS_LEFT: &[(&str, &str)] = &[
     ("Build", "build"),
@@ -1270,28 +1277,29 @@ impl App {
                 let pdf_path = std::env::current_exe()
                     .ok()
                     .and_then(|exe| {
-                        let candidate = exe
-                            .parent()?
-                            .join("cargo-gui-bedienungsanleitung.pdf");
+                        let candidate = exe.parent()?.join(HELP_PDF_FILENAME);
                         if candidate.exists() { Some(candidate) } else { None }
                     })
-                    .unwrap_or_else(|| {
-                        std::path::PathBuf::from("cargo-gui-bedienungsanleitung.pdf")
-                    });
+                    .unwrap_or_else(|| std::path::PathBuf::from(HELP_PDF_FILENAME));
 
-                #[cfg(target_os = "linux")]
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(&pdf_path)
-                    .spawn();
-                #[cfg(target_os = "macos")]
-                let _ = std::process::Command::new("open")
-                    .arg(&pdf_path)
-                    .spawn();
-                #[cfg(target_os = "windows")]
-                let _ = std::process::Command::new("cmd")
-                    .args(["/c", "start", "", &pdf_path.to_string_lossy().as_ref()])
-                    .spawn();
+                let open_result = {
+                    #[cfg(target_os = "linux")]
+                    { std::process::Command::new("xdg-open").arg(&pdf_path).spawn() }
+                    #[cfg(target_os = "macos")]
+                    { std::process::Command::new("open").arg(&pdf_path).spawn() }
+                    #[cfg(target_os = "windows")]
+                    {
+                        std::process::Command::new("cmd")
+                            .args(["/c", "start", "", pdf_path.display().to_string().as_str()])
+                            .spawn()
+                    }
+                    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+                    { Err(std::io::Error::other("unsupported platform")) }
+                };
 
+                if let Err(e) = open_result {
+                    self.status = format!("PDF konnte nicht geöffnet werden: {e}");
+                }
                 Task::none()
             }
 
@@ -2106,8 +2114,8 @@ impl App {
             .padding([5, 10]);
 
         let ghost = img_widget(iced::widget::image::Handle::from_bytes(GHOST_GIF))
-            .width(Length::Fixed(96.0))
-            .height(Length::Fixed(112.0));
+            .width(Length::Fixed(GHOST_WIDTH))
+            .height(Length::Fixed(GHOST_HEIGHT));
 
         let ghost_row = container(ghost)
             .width(Length::Fill)
