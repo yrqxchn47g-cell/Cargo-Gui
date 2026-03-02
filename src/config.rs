@@ -154,13 +154,33 @@ impl std::fmt::Display for AppTheme {
 // Config
 // ---------------------------------------------------------------------------
 
+/// Default button font size used when no value is stored in the config file.
+fn default_button_font_size() -> f32 {
+    13.0
+}
+
 /// Persistent application settings.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Default project directory restored via "Als Start" / "Standard-Pfad laden".
     pub default_path: String,
     /// Active UI theme.
     pub theme: AppTheme,
+    /// Font size (pt) applied to the main action buttons in the GUI.
+    ///
+    /// Range: 10 – 24.  Defaults to 13.0 when not set in the config file.
+    #[serde(default = "default_button_font_size")]
+    pub button_font_size: f32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            default_path: String::new(),
+            theme: AppTheme::default(),
+            button_font_size: default_button_font_size(),
+        }
+    }
 }
 
 impl Config {
