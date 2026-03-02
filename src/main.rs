@@ -1613,7 +1613,7 @@ impl App {
         let args_input = text_input("z.B. build --release", &self.cargo_args)
             .on_input(Msg::ArgsChanged)
             .on_submit(Msg::Run)
-            .padding(5)
+            .padding([1, 8])
             .width(ARGS_INPUT_WIDTH);
 
         let run_btn = hover_tip(
