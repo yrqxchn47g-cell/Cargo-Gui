@@ -663,7 +663,8 @@ impl App {
                     "Fehlgeschlagen ✗".to_string()
                 };
                 flush_output(self);
-                Task::none()
+                let line_count = self.output_content.text().split('\n').count();
+                scroll_output_to_bottom(line_count)
             }
 
             Msg::Clear => {
@@ -677,6 +678,7 @@ impl App {
             }
 
             Msg::FlushOutput => {
+                let was_dirty = self.output_dirty;
                 if self.output_dirty {
                     flush_output(self);
                 }
@@ -685,7 +687,12 @@ impl App {
                         self.display_elapsed_ms = start.elapsed().as_millis() as u64;
                     }
                 }
-                Task::none()
+                if was_dirty {
+                    let line_count = self.output_content.text().split('\n').count();
+                    scroll_output_to_bottom(line_count)
+                } else {
+                    Task::none()
+                }
             }
 
             Msg::OutputAction(action) => {
@@ -1661,6 +1668,9 @@ impl App {
 
         // -- Cargo Befehle grid (2 columns) --
         // Helper closure: builds one command button with expected/elapsed timing.
+        // The timing label is placed *outside* the button so that it stays fully
+        // readable even when the button is disabled (which would otherwise apply
+        // a global opacity reduction to every child of the button widget).
         let make_cmd_btn = |(label, cmd, tip_text): &(&str, &str, &str)| {
             let cmd_str = cmd.to_string();
             let tip = tip_text.to_string();
@@ -1669,20 +1679,24 @@ impl App {
                 .get(&cmd_str)
                 .map(|&ms| format_duration(ms))
                 .unwrap_or_else(|| "?".to_string());
-            let btn_label = if self.running && self.running_cmd == cmd_str {
+            let is_running_this = self.running && self.running_cmd == cmd_str;
+            let time_str = if is_running_this {
                 format!(
-                    "{label}\nest:{duration_label} jetzt:{}",
+                    "est:{duration_label} jetzt:{}",
                     format_duration(self.display_elapsed_ms)
                 )
             } else {
-                format!("{label} (est:{duration_label})")
+                format!("est:{duration_label}")
             };
+            let btn = button(text(label.to_string()).size(fs))
+                .on_press_maybe((!self.running).then_some(Msg::RunCommand(cmd_str)))
+                .width(Length::Fill)
+                .padding([5, 8])
+                .style(readable_button_style);
             hover_tip(
-                button(text(btn_label).size(fs))
-                    .on_press_maybe((!self.running).then_some(Msg::RunCommand(cmd_str)))
-                    .width(Length::Fill)
-                    .padding([5, 8])
-                    .style(readable_button_style),
+                column![btn, text(time_str).size(11.0)]
+                    .spacing(1)
+                    .width(Length::Fill),
                 tip,
             )
         };
@@ -1724,7 +1738,9 @@ impl App {
         let zebra = make_zebra_overlay(output_line_count);
         let output_stack: Element<'_, Msg> = stack![zebra, output_hl, output_te].into();
         let output = mouse_area(
-            scrollable(row![output_gutter, output_stack]).height(Length::Fill),
+            scrollable(row![output_gutter, output_stack])
+                .height(Length::Fill)
+                .id(scrollable::Id::new("output_scroll")),
         )
         .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Output));
 
@@ -2655,6 +2671,16 @@ fn scroll_editor_to_line(line: usize) -> Task<Msg> {
     let y = EDITOR_PADDING_TOP + line as f32 * LINE_HEIGHT;
     scrollable::scroll_to(
         scrollable::Id::new("editor_scroll"),
+        scrollable::AbsoluteOffset { x: 0.0, y },
+    )
+}
+
+/// Produce a [`Task`] that scrolls the output scrollable to the very bottom
+/// so that the most recently appended line is always visible.
+fn scroll_output_to_bottom(line_count: usize) -> Task<Msg> {
+    let y = EDITOR_PADDING_TOP + line_count as f32 * LINE_HEIGHT;
+    scrollable::scroll_to(
+        scrollable::Id::new("output_scroll"),
         scrollable::AbsoluteOffset { x: 0.0, y },
     )
 }
