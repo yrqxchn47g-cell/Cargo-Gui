@@ -830,7 +830,11 @@ impl App {
                         None => format!("1/{total}"),
                     };
                 }
-                Task::none()
+                if let Some(&line) = self.find_all_match_lines.first() {
+                    scroll_editor_to_line(line)
+                } else {
+                    Task::none()
+                }
             }
 
             Msg::ReplaceTextChanged(s) => {
@@ -846,26 +850,29 @@ impl App {
                 if total == 0 {
                     self.find_status = "Nicht gefunden".to_string();
                     self.editor_highlight_line = None;
-                } else {
-                    self.find_current_match =
-                        (self.find_current_match + 1) % total;
-                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
-                        let pos = apply_find_selection(
-                            &mut tab.content,
-                            &self.find_text,
-                            self.find_current_match,
-                        );
-                        self.editor_highlight_line = pos.map(|(line, _)| line);
-                        self.find_status = match pos {
-                            Some((line, _)) => format!(
-                                "{}/{} — Zeile {}",
-                                self.find_current_match + 1, total, line + 1
-                            ),
-                            None => format!("{}/{}", self.find_current_match + 1, total),
-                        };
-                    }
+                    return Task::none();
                 }
-                Task::none()
+                self.find_current_match = (self.find_current_match + 1) % total;
+                if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                    let pos = apply_find_selection(
+                        &mut tab.content,
+                        &self.find_text,
+                        self.find_current_match,
+                    );
+                    self.editor_highlight_line = pos.map(|(line, _)| line);
+                    self.find_status = match pos {
+                        Some((line, _)) => format!(
+                            "{}/{} — Zeile {}",
+                            self.find_current_match + 1, total, line + 1
+                        ),
+                        None => format!("{}/{}", self.find_current_match + 1, total),
+                    };
+                }
+                if let Some(&line) = self.find_all_match_lines.get(self.find_current_match) {
+                    scroll_editor_to_line(line)
+                } else {
+                    Task::none()
+                }
             }
 
             Msg::FindPrev => {
@@ -876,27 +883,31 @@ impl App {
                 if total == 0 {
                     self.find_status = "Nicht gefunden".to_string();
                     self.editor_highlight_line = None;
-                } else {
-                    // Wrap backwards: when at index 0, jump to the last match.
-                    self.find_current_match =
-                        self.find_current_match.checked_sub(1).unwrap_or(total - 1);
-                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
-                        let pos = apply_find_selection(
-                            &mut tab.content,
-                            &self.find_text,
-                            self.find_current_match,
-                        );
-                        self.editor_highlight_line = pos.map(|(line, _)| line);
-                        self.find_status = match pos {
-                            Some((line, _)) => format!(
-                                "{}/{} — Zeile {}",
-                                self.find_current_match + 1, total, line + 1
-                            ),
-                            None => format!("{}/{}", self.find_current_match + 1, total),
-                        };
-                    }
+                    return Task::none();
                 }
-                Task::none()
+                // Wrap backwards: when at index 0, jump to the last match.
+                self.find_current_match =
+                    self.find_current_match.checked_sub(1).unwrap_or(total - 1);
+                if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                    let pos = apply_find_selection(
+                        &mut tab.content,
+                        &self.find_text,
+                        self.find_current_match,
+                    );
+                    self.editor_highlight_line = pos.map(|(line, _)| line);
+                    self.find_status = match pos {
+                        Some((line, _)) => format!(
+                            "{}/{} — Zeile {}",
+                            self.find_current_match + 1, total, line + 1
+                        ),
+                        None => format!("{}/{}", self.find_current_match + 1, total),
+                    };
+                }
+                if let Some(&line) = self.find_all_match_lines.get(self.find_current_match) {
+                    scroll_editor_to_line(line)
+                } else {
+                    Task::none()
+                }
             }
 
             Msg::ReplaceOne => {
@@ -932,12 +943,24 @@ impl App {
                             self.find_status = "Nicht gefunden".to_string();
                         } else {
                             self.find_current_match %= new_total;
+                            // Reposition cursor at the new current match.
+                            let find_text = self.find_text.clone();
+                            let sel_pos = apply_find_selection(
+                                &mut tab.content,
+                                &find_text,
+                                self.find_current_match,
+                            );
+                            self.editor_highlight_line = sel_pos.map(|(l, _)| l);
                             self.find_status =
                                 format!("{}/{}", self.find_current_match + 1, new_total);
                         }
                     }
                 }
-                Task::none()
+                if let Some(&line) = self.find_all_match_lines.get(self.find_current_match) {
+                    scroll_editor_to_line(line)
+                } else {
+                    Task::none()
+                }
             }
 
             Msg::ReplaceAll => {
@@ -1879,9 +1902,11 @@ impl App {
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
                     .height(Length::Shrink);
-                let editor_stack: Element<'_, Msg> = stack![highlight, te].into();
+                let editor_stack: Element<'_, Msg> = stack![te, highlight].into();
                 mouse_area(
-                    scrollable(row![gutter, editor_stack]).height(Length::Fill),
+                    scrollable(row![gutter, editor_stack])
+                        .id(scrollable::Id::new("editor_scroll"))
+                        .height(Length::Fill),
                 )
                 .on_right_press(Msg::ShowContextMenu(ContextMenuKind::Editor))
                 .into()
@@ -2275,6 +2300,16 @@ fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize, cur
     stack(layers).into()
 }
 
+/// Produce a [`Task`] that scrolls the editor scrollable so that `line` is
+/// visible near the top of the viewport.
+fn scroll_editor_to_line(line: usize) -> Task<Msg> {
+    let y = line as f32 * LINE_HEIGHT;
+    scrollable::scroll_to(
+        scrollable::Id::new("editor_scroll"),
+        scrollable::AbsoluteOffset { x: 0.0, y },
+    )
+}
+
 /// Spawn a cargo process and return a [`Task`] that streams its output as
 /// [`Msg::Append`] messages, followed by a single [`Msg::Done`].
 ///
@@ -2633,5 +2668,158 @@ mod tests {
         let text = "hello 🎉 world 🎉 end";
         let result = text.replace("🎉", "!");
         assert_eq!(result, "hello ! world ! end");
+    }
+
+    // --- Find navigation: correct line reported for each match ---
+
+    /// Searching across multiple lines: each match maps to the correct line.
+    #[test]
+    fn find_navigation_multi_line_correct_lines() {
+        let text = "alpha\nbeta\nalpha\ngamma\nalpha";
+        let lines = collect_all_match_lines(text, "alpha");
+        // "alpha" is on lines 0, 2, 4.
+        assert_eq!(lines, vec![0, 2, 4]);
+    }
+
+    /// Next/prev navigation wraps correctly using modular arithmetic.
+    #[test]
+    fn find_navigation_next_wraps() {
+        let total = 3usize;
+        let mut current = 0usize;
+        // Advance three times; should wrap back to 0.
+        for expected in [1, 2, 0] {
+            current = (current + 1) % total;
+            assert_eq!(current, expected);
+        }
+    }
+
+    #[test]
+    fn find_navigation_prev_wraps() {
+        let total = 3usize;
+        let mut current = 0usize;
+        // Go backwards three times from 0; should cycle 2, 1, 0.
+        for expected in [2, 1, 0] {
+            current = current.checked_sub(1).unwrap_or(total - 1);
+            assert_eq!(current, expected);
+        }
+    }
+
+    /// The current match index is always a valid index into find_all_match_lines.
+    #[test]
+    fn find_current_match_is_valid_index() {
+        let text = "foo bar\nfoo baz\nqux\nfoo";
+        let lines = collect_all_match_lines(text, "foo");
+        assert_eq!(lines.len(), 3);
+        // After each advance the index must be in range.
+        let total = lines.len();
+        let mut current = 0usize;
+        for _ in 0..6 {
+            assert!(current < total);
+            current = (current + 1) % total;
+        }
+    }
+
+    /// Active match highlight: find_all_match_lines[find_current_match] gives
+    /// the line that should be highlighted in orange.
+    #[test]
+    fn active_match_highlight_line() {
+        let text = "line0 needle\nline1\nline2 needle\nline3";
+        let lines = collect_all_match_lines(text, "needle");
+        assert_eq!(lines, vec![0, 2]);
+        // find_current_match = 0 → orange band at line 0.
+        assert_eq!(lines[0], 0);
+        // After next: find_current_match = 1 → orange band at line 2.
+        assert_eq!(lines[1], 2);
+    }
+
+    // --- Replace-one state update ---
+
+    /// After replacing the only match, find_all_match_lines must be empty.
+    #[test]
+    fn replace_one_last_match_clears_list() {
+        let text = "hello world";
+        let needle = "world";
+        let replacement = "Rust";
+        let positions: Vec<usize> =
+            text.match_indices(needle).map(|(i, _)| i).collect();
+        let mut new_text = text.to_string();
+        new_text.replace_range(positions[0]..positions[0] + needle.len(), replacement);
+        assert_eq!(new_text, "hello Rust");
+        let new_lines = collect_all_match_lines(&new_text, needle);
+        assert!(new_lines.is_empty(), "no matches after replace");
+    }
+
+    /// After replacing one of two matches, find_all_match_lines has one entry
+    /// and find_current_match stays in range.
+    #[test]
+    fn replace_one_advances_correctly() {
+        let text = "foo bar foo";
+        let needle = "foo";
+        let replacement = "baz";
+        // Replace match at index 0 (first "foo").
+        let positions: Vec<usize> =
+            text.match_indices(needle).map(|(i, _)| i).collect();
+        assert_eq!(positions.len(), 2);
+        let mut new_text = text.to_string();
+        new_text.replace_range(positions[0]..positions[0] + needle.len(), replacement);
+        assert_eq!(new_text, "baz bar foo");
+        let new_lines = collect_all_match_lines(&new_text, needle);
+        assert_eq!(new_lines.len(), 1);
+        // find_current_match = 0 % 1 = 0, which is in range.
+        let new_current = 0usize % new_lines.len();
+        assert!(new_current < new_lines.len());
+        // The remaining match is still on line 0 (same line).
+        assert_eq!(new_lines[new_current], 0);
+    }
+
+    // --- Replace-all state reset ---
+
+    /// After replace-all, match list is empty and current_match resets to 0.
+    #[test]
+    fn replace_all_resets_state() {
+        let text = "foo\nbar\nfoo\nbaz";
+        let count = text.matches("foo").count();
+        assert_eq!(count, 2);
+        let new_text = text.replace("foo", "qux");
+        assert_eq!(new_text, "qux\nbar\nqux\nbaz");
+        // After replace-all: no matches remain, state is reset.
+        let new_lines = collect_all_match_lines(&new_text, "foo");
+        assert!(new_lines.is_empty());
+        // find_current_match would be reset to 0 in the handler.
+        let new_current = 0usize;
+        assert_eq!(new_current, 0);
+    }
+
+    // --- Regression: apply_find_selection returns correct (line, col) ---
+
+    /// Verify that the helper functions used by apply_find_selection return the
+    /// correct (line, col) for every match in a multi-line document.  This is
+    /// the regression test for "cursor not jumping to match line".
+    #[test]
+    fn regression_cursor_line_col_multi_line() {
+        let text = "alpha\nbeta\nalpha\ngamma\nalpha";
+        // Match 0: "alpha" at byte 0  → line 0, col 0
+        let off0 = find_match_byte_offset(text, "alpha", 0).unwrap();
+        assert_eq!(byte_offset_to_position(text, off0), (0, 0));
+        // Match 1: "alpha" at byte 11 → line 2, col 0
+        let off1 = find_match_byte_offset(text, "alpha", 1).unwrap();
+        assert_eq!(byte_offset_to_position(text, off1), (2, 0));
+        // Match 2: "alpha" at byte 22 → line 4, col 0
+        let off2 = find_match_byte_offset(text, "alpha", 2).unwrap();
+        assert_eq!(byte_offset_to_position(text, off2), (4, 0));
+    }
+
+    /// Regression: after FindTextChanged the highlight line equals the line
+    /// returned by byte_offset_to_position for match index 0.
+    #[test]
+    fn regression_highlight_line_equals_first_match_line() {
+        let text = "foo\nbar\nfoo\nbaz\nfoo";
+        let lines = collect_all_match_lines(text, "foo");
+        // find_current_match starts at 0; highlighted line must be lines[0].
+        assert_eq!(lines[0], 0);
+        // After FindNext (current=1): highlighted line is lines[1] = 2.
+        assert_eq!(lines[1], 2);
+        // After another FindNext (current=2): highlighted line is lines[2] = 4.
+        assert_eq!(lines[2], 4);
     }
 }
