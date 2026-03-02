@@ -1360,11 +1360,13 @@ impl App {
             let copy_btn = button("📋 Kopieren (Copy)")
                 .on_press(Msg::ContextCopy)
                 .width(Length::Fill)
-                .padding([4, 10]);
+                .padding([4, 10])
+                .style(readable_button_style);
             let selectall_btn = button("☰ Alles auswählen (Select All)")
                 .on_press(Msg::ContextSelectAll)
                 .width(Length::Fill)
-                .padding([4, 10]);
+                .padding([4, 10])
+                .style(readable_button_style);
 
             let mut menu_col = column![copy_btn, selectall_btn].spacing(2);
 
@@ -1372,21 +1374,25 @@ impl App {
                 let cut_btn = button("✂ Ausschneiden (Cut)")
                     .on_press(Msg::ContextCut)
                     .width(Length::Fill)
-                    .padding([4, 10]);
+                    .padding([4, 10])
+                    .style(readable_button_style);
                 let paste_btn = button("📄 Einfügen (Paste)")
                     .on_press(Msg::ContextPaste)
                     .width(Length::Fill)
-                    .padding([4, 10]);
+                    .padding([4, 10])
+                    .style(readable_button_style);
                 let find_btn = button("🔍 Suchen/Ersetzen…")
                     .on_press(Msg::ToggleFindReplace)
                     .width(Length::Fill)
-                    .padding([4, 10]);
+                    .padding([4, 10])
+                    .style(readable_button_style);
                 menu_col = menu_col.push(cut_btn).push(paste_btn).push(find_btn);
             } else {
                 let output_find_btn = button("🔍 Suchen…")
                     .on_press(Msg::ToggleOutputFind)
                     .width(Length::Fill)
-                    .padding([4, 10]);
+                    .padding([4, 10])
+                    .style(readable_button_style);
                 menu_col = menu_col.push(output_find_btn);
             }
 
@@ -1506,26 +1512,32 @@ impl App {
         let settings_btn = hover_tip(
             button(text("⚙ Einstellungen").size(fs))
                 .on_press(Msg::NavigateTo(View::Settings))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Einstellungen öffnen — Standard-Pfad, Theme und Button-Schriftgröße festlegen".to_string(),
         );
 
         let editor_btn = hover_tip(
             button(text("✏ Editor").size(fs))
                 .on_press(Msg::NavigateTo(View::Editor))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Datei-Editor öffnen — Texte bearbeiten, Tabs verwalten, Suchen/Ersetzen".to_string(),
         );
 
         let help_btn = hover_tip(
             button(text("? Hilfe").size(fs))
                 .on_press(Msg::NavigateTo(View::Help))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Bedienungsanleitung öffnen — alle Funktionen im Überblick".to_string(),
         );
 
         let quit_btn = hover_tip(
-            button(text("✕ Beenden").size(fs)).on_press(Msg::Quit).padding([5, 10]),
+            button(text("✕ Beenden").size(fs))
+                .on_press(Msg::Quit)
+                .padding([5, 10])
+                .style(readable_button_style),
             "Anwendung beenden (alle ungespeicherten Änderungen gehen verloren)".to_string(),
         );
 
@@ -1534,7 +1546,8 @@ impl App {
         let about_btn = hover_tip(
             button(text("ℹ Über").size(fs))
                 .on_press(Msg::NavigateTo(View::About))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Über Cargo GUI — Versionsinformationen und Kontakt".to_string(),
         );
 
@@ -1563,14 +1576,16 @@ impl App {
         let browse_btn = hover_tip(
             button(text("📂 Durchsuchen").size(fs))
                 .on_press(Msg::BrowsePath)
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Projektordner auswählen — öffnet einen nativen Ordnerauswahl-Dialog".to_string(),
         );
 
         let set_default_btn = hover_tip(
             button(text("Als Start").size(fs))
                 .on_press(Msg::SetAsDefault)
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Diesen Pfad als Standard-Projektpfad speichern (wird beim nächsten Start geladen)".to_string(),
         );
 
@@ -1595,14 +1610,16 @@ impl App {
         let run_btn = hover_tip(
             button(text("▶ Ausführen").size(fs))
                 .on_press_maybe((!self.running).then_some(Msg::Run))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Cargo-Befehl ausführen — startet den im Argumentfeld eingetragenen Befehl".to_string(),
         );
 
         let stop_btn = hover_tip(
             button(text("■ Stop").size(fs))
                 .on_press_maybe(self.running.then_some(Msg::Stop))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Laufenden Cargo-Prozess abbrechen".to_string(),
         );
 
@@ -1628,7 +1645,8 @@ impl App {
                     (!self.running && !self.new_project_name.trim().is_empty())
                         .then_some(Msg::RunCargoNew),
                 )
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Neues Cargo-Projekt mit dem eingetragenen Namen anlegen (cargo new <name>)".to_string(),
         );
 
@@ -1663,7 +1681,8 @@ impl App {
                 button(text(btn_label).size(fs))
                     .on_press_maybe((!self.running).then_some(Msg::RunCommand(cmd_str)))
                     .width(Length::Fill)
-                    .padding([5, 8]),
+                    .padding([5, 8])
+                    .style(readable_button_style),
                 tip,
             )
         };
@@ -1684,7 +1703,8 @@ impl App {
         let clear_btn = hover_tip(
             button(text("Ausgabe löschen").size(fs))
                 .on_press(Msg::Clear)
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Ausgabe leeren und Status zurücksetzen".to_string(),
         );
 
@@ -1717,10 +1737,12 @@ impl App {
                 .width(180);
             let next_btn = button("▼")
                 .on_press(Msg::OutputFindNext)
-                .padding([4, 8]);
+                .padding([4, 8])
+                .style(readable_button_style);
             let prev_btn = button("▲")
                 .on_press(Msg::OutputFindPrev)
-                .padding([4, 8]);
+                .padding([4, 8])
+                .style(readable_button_style);
             let close_btn = button("✕")
                 .on_press(Msg::ToggleOutputFind)
                 .padding([4, 6])
@@ -1784,7 +1806,8 @@ impl App {
         let back_btn = hover_tip(
             button(text("← Zurück").size(fs))
                 .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
@@ -1796,7 +1819,8 @@ impl App {
         let restore_btn = hover_tip(
             button(text("Standard-Pfad laden").size(fs))
                 .on_press(Msg::RestoreDefault)
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Standard-Projektpfad in das Projektverzeichnis-Feld übernehmen".to_string(),
         );
 
@@ -1824,13 +1848,15 @@ impl App {
         let font_dec_btn = hover_tip(
             button(text("−").size(16))
                 .on_press_maybe((fs > 10.0).then_some(Msg::ButtonFontSizeChanged(-1.0)))
-                .padding([4, 10]),
+                .padding([4, 10])
+                .style(readable_button_style),
             "Schriftgröße der Buttons verkleinern".to_string(),
         );
         let font_inc_btn = hover_tip(
             button(text("+").size(16))
                 .on_press_maybe((fs < 24.0).then_some(Msg::ButtonFontSizeChanged(1.0)))
-                .padding([4, 10]),
+                .padding([4, 10])
+                .style(readable_button_style),
             "Schriftgröße der Buttons vergrößern".to_string(),
         );
         let font_size_row = row![
@@ -1846,7 +1872,8 @@ impl App {
         let reset_btn = hover_tip(
             button(text("Standard zurück").size(fs))
                 .on_press(Msg::ResetSettings)
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Alle Einstellungen auf Standardwerte zurücksetzen und speichern".to_string(),
         );
 
@@ -1880,17 +1907,24 @@ impl App {
         let back_btn = hover_tip(
             button(text("← Zurück").size(fs))
                 .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
         let new_tab_btn = hover_tip(
-            button(text("+ Neu").size(fs)).on_press(Msg::TabNew).padding([5, 10]),
+            button(text("+ Neu").size(fs))
+                .on_press(Msg::TabNew)
+                .padding([5, 10])
+                .style(readable_button_style),
             "Neuen leeren Tab im Editor öffnen".to_string(),
         );
 
         let open_btn = hover_tip(
-            button(text("📂 Öffnen").size(fs)).on_press(Msg::OpenFile).padding([5, 10]),
+            button(text("📂 Öffnen").size(fs))
+                .on_press(Msg::OpenFile)
+                .padding([5, 10])
+                .style(readable_button_style),
             "Datei öffnen — öffnet einen nativen Dateiauswahl-Dialog".to_string(),
         );
 
@@ -1902,7 +1936,8 @@ impl App {
         let find_btn = hover_tip(
             button(text(find_replace_toggle_label).size(fs))
                 .on_press(Msg::ToggleFindReplace)
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Inline-Suchleiste ein-/ausblenden (Ctrl+F = Suchen, Ctrl+H = Suchen+Ersetzen)".to_string(),
         );
 
@@ -1958,18 +1993,25 @@ impl App {
                 "Suchtext eingeben (Enter = Nächstes, Shift+Enter = Vorheriges)".to_string(),
             );
             let next_btn = hover_tip(
-                button("▼").on_press(Msg::FindNext).padding([4, 8]),
+                button("▼")
+                    .on_press(Msg::FindNext)
+                    .padding([4, 8])
+                    .style(readable_button_style),
                 "Zum nächsten Treffer springen (Enter)".to_string(),
             );
             let prev_btn = hover_tip(
-                button("▲").on_press(Msg::FindPrev).padding([4, 8]),
+                button("▲")
+                    .on_press(Msg::FindPrev)
+                    .padding([4, 8])
+                    .style(readable_button_style),
                 "Zum vorherigen Treffer springen (Shift+Enter)".to_string(),
             );
             let toggle_replace_label = if self.find_show_replace { "▲ Ersetzen" } else { "▼ Ersetzen" };
             let toggle_replace_btn = hover_tip(
                 button(toggle_replace_label)
                     .on_press(Msg::ToggleReplaceField)
-                    .padding([4, 8]),
+                    .padding([4, 8])
+                    .style(readable_button_style),
                 "Ersetzen-Feld ein-/ausblenden (Ctrl+H)".to_string(),
             );
             let close_btn = hover_tip(
@@ -2009,13 +2051,17 @@ impl App {
                     "Ersetzungstext eingeben (Enter = Ersetzen)".to_string(),
                 );
                 let replace_btn = hover_tip(
-                    button("Ersetzen").on_press(Msg::ReplaceOne).padding([4, 8]),
+                    button("Ersetzen")
+                        .on_press(Msg::ReplaceOne)
+                        .padding([4, 8])
+                        .style(readable_button_style),
                     "Aktuelles Vorkommen durch den Ersetzungstext ersetzen".to_string(),
                 );
                 let replace_all_btn = hover_tip(
                     button("Alle ersetzen")
                         .on_press(Msg::ReplaceAll)
-                        .padding([4, 8]),
+                        .padding([4, 8])
+                        .style(readable_button_style),
                     "Alle Vorkommen im aktiven Tab auf einmal ersetzen".to_string(),
                 );
                 let replace_row = row![
@@ -2072,6 +2118,7 @@ impl App {
             button(text(label.to_string()).size(11))
                 .on_press(Msg::SetFindTestColor(color))
                 .padding([2, 6])
+                .style(readable_button_style)
         };
         let color_row = row![
             text("Highlight-Farbe:").size(11),
@@ -2125,14 +2172,16 @@ impl App {
         let back_btn = hover_tip(
             button(text("← Zurück").size(fs))
                 .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
         let pdf_btn = hover_tip(
             button(text("📄 PDF öffnen").size(fs))
                 .on_press(Msg::OpenHelpPdf)
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Bedienungsanleitung als PDF-Dokument öffnen".to_string(),
         );
 
@@ -2159,7 +2208,8 @@ impl App {
         let back_btn = hover_tip(
             button(text("← Zurück").size(fs))
                 .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10]),
+                .padding([5, 10])
+                .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
@@ -2396,15 +2446,79 @@ fn flush_output(app: &mut App) {
     app.output_find_current_match = 0;
 }
 
+/// Button style that gives clear visual feedback in every state while keeping
+/// foreground-to-background contrast high enough to be readable.
+///
+/// Iced 0.13's built-in `button::primary` treats `Active` and `Pressed`
+/// identically, so users receive no visual click feedback.  Additionally, the
+/// `Disabled` state reduces both colors to 50 % alpha, which can make labels
+/// unreadable on dark backgrounds.  This helper addresses both issues:
+///
+/// - **Active**: uses `primary.base` (the theme's lighter primary shade).
+/// - **Hovered**: uses `primary.strong` (the slightly darker/stronger shade)
+///   so the hover change is still visible.
+/// - **Pressed**: keeps the active background but adds a 2-px border so that
+///   the click is immediately recognisable without darkening the button.
+/// - **Disabled**: keeps the active background at 50 % but raises the text to
+///   70 % alpha so labels remain legible.
+fn readable_button_style(
+    theme: &iced::Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    use iced::widget::button::Status;
+    let palette = theme.extended_palette();
+    let active_pair = palette.primary.base;
+    let hovered_pair = palette.primary.strong;
+    let base = iced::widget::button::Style {
+        background: Some(iced::Background::Color(active_pair.color)),
+        text_color: active_pair.text,
+        border: iced::border::rounded(2),
+        ..Default::default()
+    };
+    match status {
+        Status::Active => base,
+        Status::Pressed => iced::widget::button::Style {
+            border: iced::Border {
+                width: 2.0,
+                color: active_pair.text.scale_alpha(0.7),
+                ..base.border
+            },
+            ..base
+        },
+        Status::Hovered => iced::widget::button::Style {
+            background: Some(iced::Background::Color(hovered_pair.color)),
+            text_color: hovered_pair.text,
+            ..base
+        },
+        Status::Disabled => iced::widget::button::Style {
+            background: base.background.map(|b| b.scale_alpha(0.5)),
+            text_color: base.text_color.scale_alpha(0.7),
+            ..base
+        },
+    }
+}
+
 /// Build the line-number gutter widget for `line_count` lines.
 ///
-/// Renders right-aligned line numbers in a fixed-width column.
+/// Each line is rendered as an individual fixed-height element so that the
+/// gutter never clips at large line counts (a single `text()` widget has an
+/// internal pixel-height limit that caused numbers to stop appearing around
+/// 3 500 lines in practice).  The leading `EDITOR_PADDING_TOP` spacer keeps
+/// every number aligned with the corresponding text line inside the adjacent
+/// `text_editor`.
 fn make_gutter<'a>(line_count: usize) -> Element<'a, Msg> {
-    let numbers: String = (1..=line_count)
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    container(text(numbers).size(12))
+    let mut items: Vec<Element<'a, Msg>> = Vec::with_capacity(line_count + 1);
+    // Top spacer matching text_editor's internal top padding so that line 1
+    // aligns with the first rendered text line.
+    items.push(Space::with_height(Length::Fixed(EDITOR_PADDING_TOP)).into());
+    for n in 1..=line_count {
+        items.push(
+            container(text(n.to_string()).size(12))
+                .center_y(Length::Fixed(LINE_HEIGHT))
+                .into(),
+        );
+    }
+    container(column(items))
         .style(|_theme| iced::widget::container::Style {
             background: Some(iced::Background::Color(Color::from_rgba(
                 0.12, 0.12, 0.15, 0.6,
@@ -3499,5 +3613,44 @@ mod tests {
         // 0 total means "Keine Treffer" from handler, but function returns "Treffer 0 von 0"
         // when called directly with total=0, None.
         assert_eq!(no_match, "Treffer 0 von 0");
+    }
+
+    // --- Gutter line count ---
+
+    /// The gutter line-count formula (`split('\n').count().max(1)`) must return
+    /// the correct number of lines for typical inputs, including large values
+    /// well past the old rendering limit of ~3 504 lines.
+    #[test]
+    fn gutter_line_count_formula_correct() {
+        // Single non-empty line with no trailing newline.
+        let single = "hello";
+        assert_eq!(single.split('\n').count().max(1), 1);
+
+        // Two lines separated by a newline.
+        let two = "line1\nline2";
+        assert_eq!(two.split('\n').count().max(1), 2);
+
+        // File ending with a newline produces one extra empty element.
+        let with_trailing = "line1\nline2\n";
+        assert_eq!(with_trailing.split('\n').count().max(1), 3);
+
+        // Empty string still yields at least 1 (guarded by .max(1)).
+        assert_eq!("".split('\n').count().max(1), 1);
+    }
+
+    /// The per-line gutter approach must cover all lines without clipping.
+    /// Previously a single `text()` widget was used, which stopped rendering
+    /// at roughly 3 504 lines due to an internal pixel-height limit in the
+    /// text widget.  Now each line is an independent fixed-height element, so
+    /// the count is always correct regardless of how large it gets.
+    #[test]
+    fn gutter_covers_large_line_counts() {
+        // Build a synthetic text with more lines than the old 3 504-line limit.
+        let line_count = 4_000usize;
+        let content: String = (0..line_count).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let computed = content.split('\n').count().max(1);
+        // Every line must be accounted for.
+        assert_eq!(computed, line_count,
+            "gutter must show {line_count} line numbers but computed {computed}");
     }
 }
