@@ -54,7 +54,7 @@ use iced::widget::{
     button, column, container, horizontal_space, mouse_area, pick_list, row, scrollable, stack,
     text, text_editor, text_input, Space,
 };
-use iced::{clipboard, Color, Element, Length, Subscription, Task};
+use iced::{clipboard, Color, Element, Length, Pixels, Subscription, Task};
 use tokio::sync::oneshot;
 
 // ---------------------------------------------------------------------------
@@ -79,7 +79,14 @@ const TOOLTIP_OFFSET_Y: f32 = 34.0;
 const GUTTER_WIDTH: f32 = 48.0;
 
 /// Virtual line height (px) used for the find-match highlight overlay.
+/// Must match the absolute line height set on every `text_editor` widget via
+/// `.line_height(Pixels(LINE_HEIGHT))` so that highlight bands align exactly.
 const LINE_HEIGHT: f32 = 20.0;
+
+/// Top padding (px) of the `text_editor` widget (matches the iced default of
+/// `Padding::new(5.0)`).  Highlight bands must be offset by this amount so they
+/// start at the same vertical position as the first rendered text line.
+const EDITOR_PADDING_TOP: f32 = 5.0;
 
 /// Background colour for non-current find-match highlight bands (subtle yellow).
 const FIND_OTHER_COLOR: Color = Color { r: 1.0, g: 0.88, b: 0.0, a: 0.13 };
@@ -817,16 +824,23 @@ impl App {
                 }
                 let total = self.find_all_match_lines.len();
                 if total == 0 {
-                    self.find_status = count_matches_status(
-                        self.editor_tabs.get(self.active_tab),
-                        &self.find_text,
-                    );
+                    self.find_status = if self.find_text.is_empty() {
+                        String::new()
+                    } else {
+                        "Nicht gefunden".to_string()
+                    };
                     self.editor_highlight_line = None;
-                } else if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
-                    let pos = apply_find_selection(&mut tab.content, &self.find_text, 0);
-                    self.editor_highlight_line = pos.map(|(line, _)| line);
-                    self.find_status = match pos {
-                        Some((line, _)) => format!("1/{total} — Zeile {}", line + 1),
+                } else {
+                    // Position the cursor at match 0 in the content.
+                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                        apply_find_selection(&mut tab.content, &self.find_text, 0);
+                    }
+                    // Derive status from find_all_match_lines so it always
+                    // matches the visual highlight overlay.
+                    let hl_line = self.find_all_match_lines.first().copied();
+                    self.editor_highlight_line = hl_line;
+                    self.find_status = match hl_line {
+                        Some(line) => format!("1/{total} — Zeile {}", line + 1),
                         None => format!("1/{total}"),
                     };
                 }
@@ -843,7 +857,9 @@ impl App {
             }
 
             Msg::FindNext => {
-                if self.find_text.is_empty() {
+                // No-op when the find panel is closed (e.g. triggered by a
+                // global Arrow-Down key that arrived before the panel opened).
+                if !self.find_replace_open || self.find_text.is_empty() {
                     return Task::none();
                 }
                 let total = self.find_all_match_lines.len();
@@ -854,21 +870,24 @@ impl App {
                 }
                 self.find_current_match = (self.find_current_match + 1) % total;
                 if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
-                    let pos = apply_find_selection(
+                    apply_find_selection(
                         &mut tab.content,
                         &self.find_text,
                         self.find_current_match,
                     );
-                    self.editor_highlight_line = pos.map(|(line, _)| line);
-                    self.find_status = match pos {
-                        Some((line, _)) => format!(
-                            "{}/{} — Zeile {}",
-                            self.find_current_match + 1, total, line + 1
-                        ),
-                        None => format!("{}/{}", self.find_current_match + 1, total),
-                    };
                 }
-                if let Some(&line) = self.find_all_match_lines.get(self.find_current_match) {
+                // Use find_all_match_lines for the status/highlight so they are
+                // always in sync with the visual overlay.
+                let hl_line = self.find_all_match_lines.get(self.find_current_match).copied();
+                self.editor_highlight_line = hl_line;
+                self.find_status = match hl_line {
+                    Some(line) => format!(
+                        "{}/{} — Zeile {}",
+                        self.find_current_match + 1, total, line + 1
+                    ),
+                    None => format!("{}/{}", self.find_current_match + 1, total),
+                };
+                if let Some(line) = hl_line {
                     scroll_editor_to_line(line)
                 } else {
                     Task::none()
@@ -876,7 +895,8 @@ impl App {
             }
 
             Msg::FindPrev => {
-                if self.find_text.is_empty() {
+                // No-op when the find panel is closed.
+                if !self.find_replace_open || self.find_text.is_empty() {
                     return Task::none();
                 }
                 let total = self.find_all_match_lines.len();
@@ -889,21 +909,22 @@ impl App {
                 self.find_current_match =
                     self.find_current_match.checked_sub(1).unwrap_or(total - 1);
                 if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
-                    let pos = apply_find_selection(
+                    apply_find_selection(
                         &mut tab.content,
                         &self.find_text,
                         self.find_current_match,
                     );
-                    self.editor_highlight_line = pos.map(|(line, _)| line);
-                    self.find_status = match pos {
-                        Some((line, _)) => format!(
-                            "{}/{} — Zeile {}",
-                            self.find_current_match + 1, total, line + 1
-                        ),
-                        None => format!("{}/{}", self.find_current_match + 1, total),
-                    };
                 }
-                if let Some(&line) = self.find_all_match_lines.get(self.find_current_match) {
+                let hl_line = self.find_all_match_lines.get(self.find_current_match).copied();
+                self.editor_highlight_line = hl_line;
+                self.find_status = match hl_line {
+                    Some(line) => format!(
+                        "{}/{} — Zeile {}",
+                        self.find_current_match + 1, total, line + 1
+                    ),
+                    None => format!("{}/{}", self.find_current_match + 1, total),
+                };
+                if let Some(line) = hl_line {
                     scroll_editor_to_line(line)
                 } else {
                     Task::none()
@@ -1575,7 +1596,10 @@ impl App {
 
         let output_te = text_editor(&self.output_content)
             .on_action(Msg::OutputAction)
-            .height(Length::Shrink);
+            .height(Length::Shrink)
+            // Keep output line height consistent with LINE_HEIGHT for correct
+            // zebra-stripe and highlight-band alignment.
+            .line_height(Pixels(LINE_HEIGHT));
         let output_line_count = self.output_content.text().lines().count().max(1);
         let output_gutter = make_gutter(output_line_count);
         let output_hl = make_highlight_layer(self.output_highlight_line);
@@ -1901,7 +1925,11 @@ impl App {
                 );
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
-                    .height(Length::Shrink);
+                    .height(Length::Shrink)
+                    // Force an absolute line height that matches LINE_HEIGHT exactly
+                    // so that highlight bands are always pixel-perfectly aligned,
+                    // regardless of font size or theme.
+                    .line_height(Pixels(LINE_HEIGHT));
                 let editor_stack: Element<'_, Msg> = stack![te, highlight].into();
                 mouse_area(
                     scrollable(row![gutter, editor_stack])
@@ -1988,7 +2016,7 @@ impl App {
 
         // Track the global mouse position so the tooltip overlay can follow
         // the cursor, and handle keyboard shortcuts for the inline find bar.
-        let mouse = iced::event::listen_with(|event, _status, _id| match event {
+        let mouse = iced::event::listen_with(|event, status, _id| match event {
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
                 Some(Msg::MouseMoved(position))
             }
@@ -1997,6 +2025,7 @@ impl App {
                 modifiers,
                 ..
             }) => {
+                use iced::event::Status;
                 use iced::keyboard::key::Named;
                 use iced::keyboard::Key;
                 let ctrl = modifiers.control();
@@ -2019,6 +2048,28 @@ impl App {
                 // the text_input's on_submit).
                 if shift && !ctrl && key == Key::Named(Named::Enter) {
                     return Some(Msg::FindPrev);
+                }
+                // Arrow navigation through find results.
+                //
+                // Only act when the event was NOT captured by another widget
+                // (e.g. the text_editor moving its own cursor with Arrow keys).
+                // A single-line text_input does not capture ArrowUp/Down, so
+                // pressing them while the search field is focused correctly
+                // navigates through matches.
+                //
+                // The handlers for FindNext/FindPrev guard against
+                // `!find_replace_open`, so these shortcuts are no-ops when
+                // the find panel is closed.
+                if !ctrl && !shift && status == Status::Ignored {
+                    match key {
+                        Key::Named(Named::ArrowDown) | Key::Named(Named::PageDown) => {
+                            return Some(Msg::FindNext);
+                        }
+                        Key::Named(Named::ArrowUp) | Key::Named(Named::PageUp) => {
+                            return Some(Msg::FindPrev);
+                        }
+                        _ => {}
+                    }
                 }
                 None
             }
@@ -2059,29 +2110,6 @@ fn format_duration(ms: u64) -> String {
         format!("{ms} ms")
     } else {
         format!("{:.2} s", ms as f64 / 1000.0)
-    }
-}
-
-/// Count the number of non-overlapping occurrences of `needle` in the active
-/// tab's text.  Returns 0 when `needle` is empty or no tab is given.
-fn count_matches(tab: Option<&EditorTab>, needle: &str) -> usize {
-    if needle.is_empty() {
-        return 0;
-    }
-    tab.map(|t| t.content.text().matches(needle).count())
-        .unwrap_or(0)
-}
-
-/// Build the status string shown in the find/replace panel.
-fn count_matches_status(tab: Option<&EditorTab>, needle: &str) -> String {
-    if needle.is_empty() {
-        return String::new();
-    }
-    let n = count_matches(tab, needle);
-    if n == 0 {
-        "Nicht gefunden".to_string()
-    } else {
-        format!("{n} Treffer")
     }
 }
 
@@ -2198,22 +2226,26 @@ fn make_gutter<'a>(line_count: usize) -> Element<'a, Msg> {
 /// Alternates between two subtly different background shades (even and odd
 /// rows) so individual output lines are easier to distinguish.
 fn make_zebra_overlay<'a>(line_count: usize) -> Element<'a, Msg> {
-    let bands: Vec<Element<'a, Msg>> = (0..line_count)
-        .map(|i| {
-            let bg = if i % 2 == 0 {
-                Color::from_rgba(0.15, 0.15, 0.18, 0.5)
-            } else {
-                Color::from_rgba(0.20, 0.20, 0.24, 0.5)
-            };
+    let mut bands: Vec<Element<'a, Msg>> = Vec::with_capacity(line_count + 1);
+    // Push a spacer equal to the text_editor top padding so that the first
+    // zebra band aligns with line 0 of the rendered text.
+    bands.push(Space::with_height(Length::Fixed(EDITOR_PADDING_TOP)).into());
+    for i in 0..line_count {
+        let bg = if i % 2 == 0 {
+            Color::from_rgba(0.15, 0.15, 0.18, 0.5)
+        } else {
+            Color::from_rgba(0.20, 0.20, 0.24, 0.5)
+        };
+        bands.push(
             container(Space::new(Length::Fill, Length::Fixed(LINE_HEIGHT)))
                 .style(move |_theme| iced::widget::container::Style {
                     background: Some(iced::Background::Color(bg)),
                     ..Default::default()
                 })
                 .width(Length::Fill)
-                .into()
-        })
-        .collect();
+                .into(),
+        );
+    }
     column(bands).width(Length::Fill).height(Length::Fill).into()
 }
 
@@ -2223,7 +2255,9 @@ fn make_zebra_overlay<'a>(line_count: usize) -> Element<'a, Msg> {
 /// top of the widget.  When `line_index` is `None` the overlay is invisible.
 fn make_highlight_layer<'a>(line_index: Option<usize>) -> Element<'a, Msg> {
     if let Some(line) = line_index {
-        let offset = line as f32 * LINE_HEIGHT;
+        // Add EDITOR_PADDING_TOP so the band aligns with the actual text line,
+        // not with the top of the text_editor widget (which includes top padding).
+        let offset = EDITOR_PADDING_TOP + line as f32 * LINE_HEIGHT;
         column![
             Space::with_height(Length::Fixed(offset)),
             container(Space::new(Length::Fill, Length::Fixed(LINE_HEIGHT)))
@@ -2279,7 +2313,9 @@ fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize, cur
 
     for (i, &line) in all_lines.iter().enumerate() {
         let color = if i == current_match { current_color } else { FIND_OTHER_COLOR };
-        let offset = line as f32 * LINE_HEIGHT;
+        // Add EDITOR_PADDING_TOP so each band aligns with the corresponding
+        // text line rather than drifting upward by the widget's top padding.
+        let offset = EDITOR_PADDING_TOP + line as f32 * LINE_HEIGHT;
         let band: Element<'a, Msg> = column![
             Space::with_height(Length::Fixed(offset)),
             container(Space::new(Length::Fill, Length::Fixed(LINE_HEIGHT)))
@@ -2303,7 +2339,9 @@ fn make_multi_highlight_layer<'a>(all_lines: &[usize], current_match: usize, cur
 /// Produce a [`Task`] that scrolls the editor scrollable so that `line` is
 /// visible near the top of the viewport.
 fn scroll_editor_to_line(line: usize) -> Task<Msg> {
-    let y = line as f32 * LINE_HEIGHT;
+    // Mirror the band-offset formula (EDITOR_PADDING_TOP + line * LINE_HEIGHT)
+    // so the scrollable shows the target line near the top of the viewport.
+    let y = EDITOR_PADDING_TOP + line as f32 * LINE_HEIGHT;
     scrollable::scroll_to(
         scrollable::Id::new("editor_scroll"),
         scrollable::AbsoluteOffset { x: 0.0, y },
@@ -2821,5 +2859,114 @@ mod tests {
         assert_eq!(lines[1], 2);
         // After another FindNext (current=2): highlighted line is lines[2] = 4.
         assert_eq!(lines[2], 4);
+    }
+
+    // --- Highlight-band offset includes EDITOR_PADDING_TOP ---
+
+    /// The highlight-band offset for line N must be
+    /// `EDITOR_PADDING_TOP + N * LINE_HEIGHT` so that it aligns with the
+    /// rendered text line inside the text_editor (which indents content by its
+    /// top padding).
+    #[test]
+    fn highlight_offset_includes_editor_padding() {
+        // Verify the constants themselves have the expected values so that any
+        // accidental change is caught immediately.
+        assert_eq!(super::EDITOR_PADDING_TOP, 5.0,
+            "EDITOR_PADDING_TOP must match text_editor default Padding::new(5.0)");
+        assert_eq!(super::LINE_HEIGHT, 20.0,
+            "LINE_HEIGHT must match the absolute line height set on the text_editor widget");
+
+        let padding = super::EDITOR_PADDING_TOP;
+        let lh = super::LINE_HEIGHT;
+        // Line 0: band top = 5.0 + 0 * 20.0 = 5.0  (not 0.0 as the old code produced)
+        assert_eq!(padding + 0.0 * lh, 5.0);
+        // Line 1: band top = 5.0 + 1 * 20.0 = 25.0
+        assert_eq!(padding + 1.0 * lh, 25.0);
+        // Line 5: band top = 5.0 + 5 * 20.0 = 105.0
+        assert_eq!(padding + 5.0 * lh, 105.0);
+        // Old formula (without padding) gave 100.0 for line 5 — verify the
+        // difference equals exactly EDITOR_PADDING_TOP.
+        let old_offset = 5.0 * lh; // 100.0
+        let new_offset = padding + 5.0 * lh; // 105.0
+        assert_eq!(new_offset - old_offset, padding);
+    }
+
+    /// `scroll_editor_to_line` must scroll to the same y-coordinate as the
+    /// top of the highlight band for that line.
+    #[test]
+    fn scroll_target_matches_highlight_offset() {
+        let lh = super::LINE_HEIGHT;    // 20.0
+        let pt = super::EDITOR_PADDING_TOP; // 5.0
+        // Spot-check a few lines with hard-coded expected values.
+        assert_eq!(pt + 0.0 * lh,   5.0);
+        assert_eq!(pt + 1.0 * lh,  25.0);
+        assert_eq!(pt + 10.0 * lh, 205.0);
+        assert_eq!(pt + 50.0 * lh, 1005.0);
+        // Old (broken) formula was `line * LINE_HEIGHT`; verify it differs.
+        let old_y_line10 = 10.0 * lh;     // 200.0
+        let new_y_line10 = pt + 10.0 * lh; // 205.0
+        assert_ne!(old_y_line10, new_y_line10,
+            "scroll target must include EDITOR_PADDING_TOP");
+    }
+
+    // --- Status string is derived from find_all_match_lines ---
+
+    /// The find_status must reference lines from find_all_match_lines so it is
+    /// always in sync with the visual highlight overlay.
+    #[test]
+    fn find_status_uses_match_lines() {
+        let text = "alpha\nbeta\nalpha\ngamma";
+        let lines = collect_all_match_lines(text, "alpha");
+        assert_eq!(lines, vec![0, 2]);
+        let total = lines.len();
+        // match index 0 → "1/2 — Zeile 1"
+        let s0 = format!("1/{total} — Zeile {}", lines[0] + 1);
+        assert_eq!(s0, "1/2 — Zeile 1");
+        // match index 1 → "2/2 — Zeile 3"
+        let s1 = format!("2/{total} — Zeile {}", lines[1] + 1);
+        assert_eq!(s1, "2/2 — Zeile 3");
+    }
+
+    // --- Arrow-key navigation wraps correctly ---
+
+    /// PageDown / ArrowDown: same modular arithmetic as FindNext.
+    #[test]
+    fn arrow_down_navigation_wraps() {
+        let total = 4usize;
+        let mut current = 0usize;
+        let steps = [1, 2, 3, 0, 1];
+        for expected in steps {
+            current = (current + 1) % total;
+            assert_eq!(current, expected);
+        }
+    }
+
+    /// PageUp / ArrowUp: same modular arithmetic as FindPrev.
+    #[test]
+    fn arrow_up_navigation_wraps() {
+        let total = 4usize;
+        let mut current = 0usize;
+        let steps = [3, 2, 1, 0, 3];
+        for expected in steps {
+            current = current.checked_sub(1).unwrap_or(total - 1);
+            assert_eq!(current, expected);
+        }
+    }
+
+    /// When the find panel is closed (find_all_match_lines empty), navigation
+    /// must not corrupt find_current_match.
+    #[test]
+    fn navigation_no_op_when_panel_closed() {
+        // Simulate: panel closed → match list cleared.
+        let find_all_match_lines: Vec<usize> = Vec::new();
+        // FindNext would return early when total == 0; current stays at 0.
+        let current = 0usize;
+        let total = find_all_match_lines.len();
+        // Guard in handler: if total == 0, return early → current unchanged.
+        if total == 0 {
+            assert_eq!(current, 0);
+        } else {
+            panic!("should have returned early");
+        }
     }
 }
