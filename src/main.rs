@@ -199,6 +199,10 @@ struct EditorTab {
     content: text_editor::Content,
     /// `true` after any edit action since the last save.
     dirty: bool,
+    /// Persistent diagnostic error/warning/note lines for this tab.
+    /// Each entry is `(0-based line index, highlight color)`.  Lines remain
+    /// highlighted until the tab is closed or deleted.
+    error_lines: Vec<(usize, Color)>,
 }
 
 impl EditorTab {
@@ -208,6 +212,7 @@ impl EditorTab {
             path: None,
             content: text_editor::Content::new(),
             dirty: false,
+            error_lines: Vec::new(),
         }
     }
 
@@ -221,6 +226,7 @@ impl EditorTab {
             path: Some(path),
             content: text_editor::Content::with_text(file_text),
             dirty: false,
+            error_lines: Vec::new(),
         }
     }
 
@@ -1538,12 +1544,22 @@ impl App {
                             ));
                         }
                     }
-                    self.editor_highlight_line = Some(target_line);
-                    self.diag_highlight_color = match level {
+                    let diag_color = match level {
                         DiagnosticLevel::Error   => DIAG_ERROR_COLOR,
                         DiagnosticLevel::Warning => DIAG_WARN_COLOR,
                         DiagnosticLevel::Note    => DIAG_NOTE_COLOR,
                     };
+                    self.diag_highlight_color = diag_color;
+                    // Store the error line persistently on the tab so the
+                    // highlight survives scrolling and tab switches.
+                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                        // Avoid duplicates: only add if this line is not already
+                        // present (one highlight band per line is sufficient).
+                        if !tab.error_lines.iter().any(|&(l, _)| l == target_line) {
+                            tab.error_lines.push((target_line, diag_color));
+                        }
+                    }
+                    self.editor_highlight_line = Some(target_line);
                     // Switch to the Editor view.
                     self.current_view = View::Editor;
                     return scroll_editor_to_line(target_line);
@@ -2040,7 +2056,8 @@ impl App {
             // zebra-stripe and highlight-band alignment.
             .line_height(Pixels(LINE_HEIGHT));
         let output_line_count = self.output_content.text().split('\n').count().max(1);
-        let output_gutter = make_gutter(output_line_count);
+        // The output panel has no diagnostic error lines; pass an empty slice.
+        let output_gutter = make_gutter(output_line_count, &[]);
         let output_hl = make_highlight_layer(self.output_highlight_line);
         let zebra = make_zebra_overlay(output_line_count);
         let output_stack: Element<'_, Msg> = stack![zebra, output_hl, output_te].into();
@@ -2376,11 +2393,11 @@ impl App {
                 );
 
                 let close_btn = hover_tip(
-                    button(bi(Bootstrap::X).size(11))
+                    button(bi(Bootstrap::Trash).size(11))
                         .on_press(Msg::TabClose(i))
                         .padding([4, 6])
                         .style(button::danger),
-                    "Tab schließen".to_string(),
+                    "Tab löschen".to_string(),
                 );
 
                 row![tab_btn, close_btn]
@@ -2498,16 +2515,15 @@ impl App {
         let editor_widget: Element<'_, Msg> =
             if let Some(tab) = self.editor_tabs.get(self.active_tab) {
                 let line_count = tab.content.text().split('\n').count().max(1);
-                let gutter = make_gutter(line_count);
+                let gutter = make_gutter(line_count, &tab.error_lines);
                 let highlight = make_multi_highlight_layer(
                     &self.find_all_match_lines,
                     self.find_current_match,
                     self.find_test_color,
                 );
-                let diag_highlight = make_error_highlight_layer(
-                    self.editor_highlight_line,
-                    self.diag_highlight_color,
-                );
+                // Persistent per-tab diagnostic highlights (all error/warning/note
+                // lines remain visible until the tab is closed).
+                let diag_highlight = make_persistent_error_highlight_layer(&tab.error_lines);
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
                     .height(Length::Shrink)
@@ -2968,14 +2984,31 @@ fn alarm_button_style(
 /// 3 500 lines in practice).  The leading `EDITOR_PADDING_TOP` spacer keeps
 /// every number aligned with the corresponding text line inside the adjacent
 /// `text_editor`.
-fn make_gutter<'a>(line_count: usize) -> Element<'a, Msg> {
+///
+/// Lines listed in `error_lines` (as 0-based indices) are rendered with the
+/// associated diagnostic color so that error/warning/note positions are
+/// immediately visible in the gutter.
+fn make_gutter<'a>(line_count: usize, error_lines: &[(usize, Color)]) -> Element<'a, Msg> {
+    // Build a fast lookup: 0-based line index → diagnostic color.
+    let error_map: std::collections::HashMap<usize, Color> =
+        error_lines.iter().copied().collect();
+
     let mut items: Vec<Element<'a, Msg>> = Vec::with_capacity(line_count + 1);
     // Top spacer matching text_editor's internal top padding so that line 1
     // aligns with the first rendered text line.
     items.push(Space::with_height(Length::Fixed(EDITOR_PADDING_TOP)).into());
     for n in 1..=line_count {
+        let line_0based = n - 1;
+        let num_text = if let Some(&color) = error_map.get(&line_0based) {
+            // Saturate the diagnostic color (override alpha to 1.0) so the
+            // gutter number is fully opaque and clearly visible.
+            let gutter_color = Color { a: 1.0, ..color };
+            text(n.to_string()).size(12).color(gutter_color)
+        } else {
+            text(n.to_string()).size(12)
+        };
         items.push(
-            container(text(n.to_string()).size(12))
+            container(num_text)
                 .center_y(Length::Fixed(LINE_HEIGHT))
                 .into(),
         );
@@ -3052,16 +3085,28 @@ fn make_highlight_layer<'a>(line_index: Option<usize>) -> Element<'a, Msg> {
     }
 }
 
-/// Build a virtual highlight-overlay element that colors one diagnostic line.
+/// Build a virtual highlight-overlay element that colors **all** persistent
+/// diagnostic lines for the active editor tab.
 ///
-/// Works like [`make_highlight_layer`] but accepts a custom `color` so that
-/// errors, warnings, and notes each get their own distinct tint.  The alpha
-/// component of `color` is overridden to `0.25` to keep the text readable.
-fn make_error_highlight_layer<'a>(line_index: Option<usize>, color: Color) -> Element<'a, Msg> {
-    if let Some(line) = line_index {
-        let offset = EDITOR_PADDING_TOP + line as f32 * LINE_HEIGHT;
+/// Similar to [`make_multi_highlight_layer`] but uses the per-tab
+/// `error_lines` (stored as `Vec<(usize, Color)>`) instead of find-match
+/// state.  Each line is independently positioned so that all bands remain
+/// correctly aligned during scrolling.
+///
+/// When `error_lines` is empty the overlay is fully transparent.
+fn make_persistent_error_highlight_layer<'a>(error_lines: &[(usize, Color)]) -> Element<'a, Msg> {
+    if error_lines.is_empty() {
+        return Space::new(Length::Fill, Length::Fill).into();
+    }
+
+    let mut layers: Vec<Element<'a, Msg>> = Vec::with_capacity(error_lines.len() + 1);
+    // Base transparent fill so the stack occupies the full editor area.
+    layers.push(Space::new(Length::Fill, Length::Fill).into());
+
+    for &(line, color) in error_lines {
         let hl_color = Color { a: 0.25, ..color };
-        column![
+        let offset = EDITOR_PADDING_TOP + line as f32 * LINE_HEIGHT;
+        let band: Element<'a, Msg> = column![
             Space::with_height(Length::Fixed(offset)),
             container(Space::new(Length::Fill, Length::Fixed(LINE_HEIGHT)))
                 .style(move |_theme| iced::widget::container::Style {
@@ -3074,10 +3119,11 @@ fn make_error_highlight_layer<'a>(line_index: Option<usize>, color: Color) -> El
         ]
         .width(Length::Fill)
         .height(Length::Fill)
-        .into()
-    } else {
-        Space::new(Length::Fill, Length::Fill).into()
+        .into();
+        layers.push(band);
     }
+
+    stack(layers).into()
 }
 
 /// Collect the 0-based line numbers of every non-overlapping occurrence of
