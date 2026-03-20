@@ -41,6 +41,7 @@
 //! change (file is tiny, so I/O is negligible).
 
 mod config;
+mod icons;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -55,6 +56,7 @@ use iced::widget::{
     scrollable, stack, text, text_editor, text_input, Space,
 };
 use iced::{clipboard, Color, Element, Length, Pixels, Subscription, Task};
+use icons::{bi, Bootstrap};
 use tokio::sync::oneshot;
 
 // ---------------------------------------------------------------------------
@@ -74,6 +76,10 @@ const TOOLTIP_OFFSET_X: f32 = 60.0;
 
 /// Vertical offset that places the tooltip above the cursor.
 const TOOLTIP_OFFSET_Y: f32 = 34.0;
+
+/// Estimated width of the tooltip box used when positioning to the left of the
+/// cursor (lower half of the screen).
+const TOOLTIP_ESTIMATED_WIDTH: f32 = 260.0;
 
 /// Width of the line-number gutter rendered left of the text editors.
 const GUTTER_WIDTH: f32 = 48.0;
@@ -263,6 +269,7 @@ fn main() -> iced::Result {
     iced::application("Cargo GUI", App::update, App::view)
         .subscription(App::subscription)
         .theme(|app: &App| app.config.theme.to_iced())
+        .font(icons::BOOTSTRAP_FONT_BYTES)
         .run_with(App::new)
 }
 
@@ -362,6 +369,8 @@ struct App {
     mouse_x: f32,
     /// Current mouse cursor Y position (in logical pixels).
     mouse_y: f32,
+    /// Current window height in logical pixels (updated via WindowResized).
+    window_height: f32,
 
     // --- Diagnostics ---
     /// Parsed diagnostics accumulated during the last cargo run.
@@ -416,6 +425,7 @@ impl App {
                 tooltip_text: None,
                 mouse_x: 0.0,
                 mouse_y: 0.0,
+                window_height: 600.0,
                 diagnostics: Vec::new(),
                 pending_diag_level: None,
             },
@@ -558,6 +568,8 @@ enum Msg {
     TooltipShow(String),
     /// The cursor left a widget — hide the tooltip.
     TooltipHide,
+    /// Window was resized; track height for tooltip positioning.
+    WindowResized(iced::Size),
 
     // --- App ---
     Quit,
@@ -1427,6 +1439,11 @@ impl App {
                 Task::none()
             }
 
+            Msg::WindowResized(size) => {
+                self.window_height = size.height;
+                Task::none()
+            }
+
             // --- App ---
             Msg::Quit => iced::exit(),
 
@@ -1565,40 +1582,64 @@ impl App {
             .into();
 
             // Build menu items.
-            let copy_btn = button("📋 Kopieren (Copy)")
-                .on_press(Msg::ContextCopy)
-                .width(Length::Fill)
-                .padding([4, 10])
-                .style(readable_button_style);
-            let selectall_btn = button("☰ Alles auswählen (Select All)")
-                .on_press(Msg::ContextSelectAll)
-                .width(Length::Fill)
-                .padding([4, 10])
-                .style(readable_button_style);
+            let copy_btn = button(
+                row![bi(Bootstrap::ClipboardFill).size(13), text(" Kopieren (Copy)").size(13)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::ContextCopy)
+            .width(Length::Fill)
+            .padding([4, 10])
+            .style(readable_button_style);
+            let selectall_btn = button(
+                row![bi(Bootstrap::TextLeft).size(13), text(" Alles auswählen (Select All)").size(13)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::ContextSelectAll)
+            .width(Length::Fill)
+            .padding([4, 10])
+            .style(readable_button_style);
 
             let mut menu_col = column![copy_btn, selectall_btn].spacing(2);
 
             if is_editor {
-                let cut_btn = button("✂ Ausschneiden (Cut)")
-                    .on_press(Msg::ContextCut)
-                    .width(Length::Fill)
-                    .padding([4, 10])
-                    .style(readable_button_style);
-                let paste_btn = button("📄 Einfügen (Paste)")
-                    .on_press(Msg::ContextPaste)
-                    .width(Length::Fill)
-                    .padding([4, 10])
-                    .style(readable_button_style);
-                let find_btn = button("🔍 Suchen/Ersetzen…")
-                    .on_press(Msg::ToggleFindReplace)
-                    .width(Length::Fill)
-                    .padding([4, 10])
-                    .style(readable_button_style);
+                let cut_btn = button(
+                    row![bi(Bootstrap::Scissors).size(13), text(" Ausschneiden (Cut)").size(13)]
+                        .spacing(4)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press(Msg::ContextCut)
+                .width(Length::Fill)
+                .padding([4, 10])
+                .style(readable_button_style);
+                let paste_btn = button(
+                    row![bi(Bootstrap::ClipboardFill).size(13), text(" Einfügen (Paste)").size(13)]
+                        .spacing(4)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press(Msg::ContextPaste)
+                .width(Length::Fill)
+                .padding([4, 10])
+                .style(readable_button_style);
+                let find_btn = button(
+                    row![bi(Bootstrap::Search).size(13), text(" Suchen/Ersetzen…").size(13)]
+                        .spacing(4)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press(Msg::ToggleFindReplace)
+                .width(Length::Fill)
+                .padding([4, 10])
+                .style(readable_button_style);
                 menu_col = menu_col.push(cut_btn).push(paste_btn).push(find_btn);
             } else {
-                let output_find_btn = button("🔍 Suchen…")
-                    .on_press(Msg::ToggleOutputFind)
-                    .width(Length::Fill)
+                let output_find_btn = button(
+                    row![bi(Bootstrap::Search).size(13), text(" Suchen…").size(13)]
+                        .spacing(4)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press(Msg::ToggleOutputFind)
+                .width(Length::Fill)
                     .padding([4, 10])
                     .style(readable_button_style);
                 menu_col = menu_col.push(output_find_btn);
@@ -1663,11 +1704,18 @@ impl App {
                 .padding([4, 8])
                 .into();
 
-            // Position the tooltip above and horizontally centred over the
-            // cursor.  See `TOOLTIP_OFFSET_X` / `TOOLTIP_OFFSET_Y` for the
-            // exact values.
-            let tip_x = (self.mouse_x - TOOLTIP_OFFSET_X).max(0.0);
-            let tip_y = (self.mouse_y - TOOLTIP_OFFSET_Y).max(0.0);
+            // When the cursor is in the LOWER half of the window, show the
+            // tooltip to the LEFT of the cursor so it does not obscure buttons
+            // above. In the upper half, keep the classic above-cursor position.
+            let (tip_x, tip_y) = if self.mouse_y > self.window_height / 2.0 {
+                let x = (self.mouse_x - TOOLTIP_ESTIMATED_WIDTH - 12.0).max(0.0);
+                let y = (self.mouse_y - 24.0).max(0.0);
+                (x, y)
+            } else {
+                let x = (self.mouse_x - TOOLTIP_OFFSET_X).max(0.0);
+                let y = (self.mouse_y - TOOLTIP_OFFSET_Y).max(0.0);
+                (x, y)
+            };
 
             column![
                 Space::with_height(Length::Fixed(tip_y)),
@@ -1694,7 +1742,7 @@ impl App {
 
     fn view_topbar(&self) -> Element<'_, Msg> {
         let menu_btn = hover_tip(
-            button(text("☰").size(self.config.button_font_size)).padding([4, 10]),
+            button(bi(Bootstrap::List).size(self.config.button_font_size)).padding([4, 10]),
             "Hauptmenü — Schnellzugriff auf Ansichten und Funktionen".to_string(),
         );
 
@@ -1718,43 +1766,63 @@ impl App {
     fn view_footer(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let settings_btn = hover_tip(
-            button(text("⚙ Einstellungen").size(fs))
-                .on_press(Msg::NavigateTo(View::Settings))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::GearFill).size(fs), text(" Einstellungen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Settings))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Einstellungen öffnen — Standard-Pfad, Theme und Button-Schriftgröße festlegen".to_string(),
         );
 
         let editor_btn = hover_tip(
-            button(text("✏ Editor").size(fs))
-                .on_press(Msg::NavigateTo(View::Editor))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::PencilFill).size(fs), text(" Editor").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Editor))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Datei-Editor öffnen — Texte bearbeiten, Tabs verwalten, Suchen/Ersetzen".to_string(),
         );
 
         let help_btn = hover_tip(
-            button(text("? Hilfe").size(fs))
-                .on_press(Msg::NavigateTo(View::Help))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::QuestionCircle).size(fs), text(" Hilfe").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Help))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Bedienungsanleitung öffnen — alle Funktionen im Überblick".to_string(),
         );
 
         let quit_btn = hover_tip(
-            button(text("✕ Beenden").size(fs))
-                .on_press(Msg::Quit)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::XCircle).size(fs), text(" Beenden").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::Quit)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Anwendung beenden (alle ungespeicherten Änderungen gehen verloren)".to_string(),
         );
 
         let status_text = text(format!("Status: {}", self.status)).size(13);
 
         let about_btn = hover_tip(
-            button(text("ℹ Über").size(fs))
-                .on_press(Msg::NavigateTo(View::About))
-                .padding([5, 10])
+            button(
+                row![bi(Bootstrap::InfoCircleFill).size(fs), text(" Über").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::About))
+            .padding([5, 10])
                 .style(readable_button_style),
             "Über Cargo GUI — Versionsinformationen und Kontakt".to_string(),
         );
@@ -1782,10 +1850,14 @@ impl App {
             .padding(5);
 
         let browse_btn = hover_tip(
-            button(text("📂 Durchsuchen").size(fs))
-                .on_press(Msg::BrowsePath)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::FoldertwoOpen).size(fs), text(" Durchsuchen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::BrowsePath)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Projektordner auswählen — öffnet einen nativen Ordnerauswahl-Dialog".to_string(),
         );
 
@@ -1817,19 +1889,30 @@ impl App {
             .width(ARGS_INPUT_WIDTH);
 
         let run_btn = hover_tip(
-            button(text("▶ Ausführen").size(fs))
-                .on_press_maybe((!self.running).then_some(Msg::Run))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::PlayFill).size(fs), text(" Ausführen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press_maybe((!self.running).then_some(Msg::Run))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Cargo-Befehl ausführen — startet den im Argumentfeld eingetragenen Befehl".to_string(),
         );
 
         let stop_btn = hover_tip(
-            button(text("■ Stop").size(fs))
-                .on_press_maybe(self.running.then_some(Msg::Stop))
-                .padding([5, 10])
-                .style(readable_button_style),
-            "Laufenden Cargo-Prozess abbrechen".to_string(),
+            button(
+                row![
+                    bi(Bootstrap::ExclamationOctagonFill).size(fs + 2.0),
+                    text(" Stop").size(fs),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+            )
+            .on_press_maybe(self.running.then_some(Msg::Stop))
+            .padding([5, 10])
+            .style(alarm_button_style),
+            "Laufenden Cargo-Prozess abbrechen — roter Alarm-Stopp-Knopf".to_string(),
         );
 
         let args_row = row![
@@ -2080,7 +2163,7 @@ impl App {
         let left_panel = scrollable(
             column![args_row, new_row, commands_section]
                 .spacing(4)
-                .width(420),
+                .width(500),
         );
 
         let main_content = column![
@@ -2220,31 +2303,41 @@ impl App {
         );
 
         let open_btn = hover_tip(
-            button(text("📂 Öffnen").size(fs))
-                .on_press(Msg::OpenFile)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::FoldertwoOpen).size(fs), text(" Öffnen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::OpenFile)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Datei öffnen — öffnet einen nativen Dateiauswahl-Dialog".to_string(),
         );
 
         let save_btn = hover_tip(
-            button(text("💾 Speichern").size(fs))
-                .on_press(Msg::SaveFile)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::Floppy).size(fs), text(" Speichern").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::SaveFile)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Aktiven Tab speichern — bei Untitled wird ein Speichern-Dialog geöffnet".to_string(),
         );
 
-        let find_replace_toggle_label = if self.find_replace_open {
-            "🔍 Suchen ✕"
-        } else {
-            "🔍 Suchen"
-        };
         let find_btn = hover_tip(
-            button(text(find_replace_toggle_label).size(fs))
-                .on_press(Msg::ToggleFindReplace)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![
+                    bi(Bootstrap::Search).size(fs),
+                    text(if self.find_replace_open { " Suchen ✕" } else { " Suchen" }).size(fs),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::ToggleFindReplace)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Inline-Suchleiste ein-/ausblenden (Ctrl+F = Suchen, Ctrl+H = Suchen+Ersetzen)".to_string(),
         );
 
@@ -2332,7 +2425,7 @@ impl App {
 
             // First row: search field + navigation + status + close.
             let find_row = row![
-                text("🔍").size(12),
+                bi(Bootstrap::Search).size(12),
                 find_input,
                 prev_btn,
                 next_btn,
@@ -2628,6 +2721,9 @@ impl App {
                 }
                 None
             }
+            iced::Event::Window(iced::window::Event::Resized(size)) => {
+                Some(Msg::WindowResized(size))
+            }
             _ => None,
         });
 
@@ -2802,6 +2898,50 @@ fn readable_button_style(
         Status::Disabled => iced::widget::button::Style {
             background: base.background.map(|b| b.scale_alpha(0.5)),
             text_color: base.text_color.scale_alpha(0.7),
+            ..base
+        },
+    }
+}
+
+/// Red alarm-style button used for the Stop action.
+///
+/// Always renders with a vivid red background regardless of the current theme
+/// so the Stop button is immediately recognisable as a danger action.
+/// The button is dimmed (50 % alpha) in the `Disabled` state to signal that
+/// no cargo process is currently running.
+fn alarm_button_style(
+    _theme: &iced::Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    use iced::widget::button::Status;
+    let red_active   = Color { r: 0.82, g: 0.10, b: 0.10, a: 1.0 };
+    let red_hovered  = Color { r: 0.95, g: 0.18, b: 0.18, a: 1.0 };
+    let base = iced::widget::button::Style {
+        background: Some(iced::Background::Color(red_active)),
+        text_color: Color::WHITE,
+        border: iced::border::rounded(2),
+        ..Default::default()
+    };
+    match status {
+        Status::Active => base,
+        Status::Pressed => iced::widget::button::Style {
+            border: iced::Border {
+                width: 2.0,
+                color: Color::WHITE.scale_alpha(0.7),
+                ..base.border
+            },
+            ..base
+        },
+        Status::Hovered => iced::widget::button::Style {
+            background: Some(iced::Background::Color(red_hovered)),
+            ..base
+        },
+        Status::Disabled => iced::widget::button::Style {
+            background: Some(iced::Background::Color(Color {
+                a: 0.4,
+                ..red_active
+            })),
+            text_color: Color::WHITE.scale_alpha(0.5),
             ..base
         },
     }
@@ -3164,9 +3304,14 @@ Cargo GUI — Bedienungsanleitung
 
 Cargo GUI ist eine grafische Benutzeroberfläche für den Rust-Paketmanager Cargo.
 
+## Symbole / Icons
+Alle Schaltflächen verwenden Bootstrap-Icons aus dem integrierten Icon-Font.
+Damit sind die Icons auf jedem Betriebssystem scharf und einheitlich dargestellt.
+
 ## Projektverzeichnis
-Geben Sie den Pfad zu Ihrem Rust-Projekt ein oder klicken Sie auf \"📂 Durchsuchen\",
-um einen Ordner auszuwählen. Mit \"Als Start\" speichern Sie den Pfad als Standard.
+Geben Sie den Pfad zu Ihrem Rust-Projekt ein oder klicken Sie auf
+\"[Ordner] Durchsuchen\", um einen Ordner auszuwählen.
+Mit \"Als Start\" speichern Sie den Pfad als Standard-Startpfad.
 
 ## Argumente
 Tragen Sie den gewünschten Cargo-Befehl ein, z.B.:
@@ -3204,35 +3349,49 @@ neues Rust-Projekt im ausgewählten Verzeichnis anzulegen.
 Die Ausgabe des letzten Cargo-Laufs wird hier angezeigt. Sie können Text
 selektieren und kopieren. Mit \"Ausgabe löschen\" wird die Ausgabe zurückgesetzt.
 
-## Stop
-Während ein Cargo-Prozess läuft, können Sie ihn mit \"■ Stop\" abbrechen.
+## Stop — Roter Alarm-Knopf
+Der rote Stop-Knopf (Alarm-Symbol) erscheint rechts neben \"Ausführen\".
+Während ein Cargo-Prozess läuft, können Sie ihn damit sofort abbrechen.
+  - Aktiv (rot leuchtend): Cargo läuft — Klick bricht den Prozess ab.
+  - Inaktiv (gedimmt):     Kein Cargo-Prozess aktiv — Knopf hat keine Wirkung.
+
+## Diagnose-Panel (nach einem Cargo-Lauf)
+Nach einem Cargo-Build werden Fehler, Warnungen und Hinweise automatisch
+geparst und unter der Ausgabe als farbige Schaltflächen dargestellt:
+  - Roter Button   [FEHLER]  — Kompilierfehler (error[Exxxx]: ...)
+  - Gelber Button  [WARNUNG] — Warnungen (warning: ...)
+  - Blauer Button  [HINWEIS] — Hinweise (note: ...)
+Klick auf einen Button öffnet die betreffende Quelldatei im Editor und
+springt automatisch zur genauen Zeile und Spalte des Fehlers.
+Beim Überfahren mit der Maus zeigt ein Tooltip die vollständige Fehlermeldung
+mit Dateinamen, Zeile und Spalte.
 
 ## Einstellungen
-Unter \"⚙ Einstellungen\" können Sie den Standard-Projektpfad festlegen,
+Unter \"[Zahnrad] Einstellungen\" können Sie den Standard-Projektpfad festlegen,
 das Theme auswählen, die Button-Schriftgröße anpassen und Einstellungen zurücksetzen.
 Einstellungen werden sofort automatisch gespeichert.
 
 Button-Schriftgröße:
-  Mit den Schaltflächen \"−\" und \"+\" lässt sich die Schriftgröße der Buttons
-  stufenweise anpassen (Bereich: 10–24 pt, Standard: 13 pt).
+  Mit den Schaltflächen \"-\" und \"+\" lässt sich die Schriftgröße der Buttons
+  stufenweise anpassen (Bereich: 10-24 pt, Standard: 13 pt).
   Die Einstellung wird gespeichert und beim nächsten Start wieder angewendet.
 
 Verfügbare Themes:
   Hell (Light) · Dunkel (Dark) · Dracula · Nord · Solarized Light/Dark
-  Gruvbox Light/Dark · Catppuccin Latte/Frappé/Macchiato/Mocha
+  Gruvbox Light/Dark · Catppuccin Latte/Frappe/Macchiato/Mocha
   Tokyo Night · Tokyo Night Storm · Tokyo Night Light
   Kanagawa Wave · Kanagawa Dragon · Kanagawa Lotus
   Moonfly · Nightfly · Oxocarbon
 
 ## Editor
-Unter \"✏ Editor\" steht ein Texteditor mit Tabs zur Verfügung.
-  - \"+ Neu\"        — Neuen leeren Tab öffnen
-  - \"📂 Öffnen\"    — Datei laden (öffnet nativen Dateiauswahl-Dialog)
-  - \"💾 Speichern\" — Aktiven Tab speichern; bei Untitled-Dateien wird ein
-                       nativer Speichern-Dialog geöffnet.
-  - \"✕\"            — Tab schließen
-  - \"*\"            im Tabtitel zeigt ungespeicherte Änderungen an.
-  - \"🔍 Suchen\"    — Inline-Suchleiste ein-/ausblenden (auch per Ctrl+F / Ctrl+H).
+Unter \"[Stift] Editor\" steht ein Texteditor mit Tabs zur Verfügung.
+  - \"+ Neu\"          — Neuen leeren Tab öffnen
+  - \"[Ordner] Oeffnen\" — Datei laden (oeffnet nativen Dateiauswahl-Dialog)
+  - \"[Disk] Speichern\" — Aktiven Tab speichern; bei Untitled-Dateien wird ein
+                          nativer Speichern-Dialog geöffnet.
+  - \"Tabs x\"         — Tab schliessen
+  - \"*\"              im Tabtitel zeigt ungespeicherte Aenderungen an.
+  - \"[Lupe] Suchen\"  — Inline-Suchleiste ein-/ausblenden (auch per Ctrl+F / Ctrl+H).
   - Rechtsklick im Editor öffnet ein Kontextmenü mit Kopieren, Ausschneiden,
     Einfügen, Alles auswählen und Suchen/Ersetzen.
 
@@ -3240,22 +3399,28 @@ Unter \"✏ Editor\" steht ein Texteditor mit Tabs zur Verfügung.
 Die Inline-Suchleiste öffnet sich unterhalb der Tab-Leiste:
   - Ctrl+F           — Suchleiste öffnen (nur Suchen).
   - Ctrl+H           — Suchleiste öffnen mit Ersetzen-Feld.
-  - Esc              — Suchleiste schließen.
-  - Suchfeld: Suchtext eingeben (Enter = Nächstes, Shift+Enter = Vorheriges).
-  - \"▼\" / \"▲\"        — Durch Treffer navigieren.
-  - \"▼ Ersetzen\"     — Ersetzen-Feld ein-/ausblenden.
+  - Esc              — Suchleiste schliessen.
+  - Suchfeld: Suchtext eingeben (Enter = Naechstes, Shift+Enter = Vorheriges).
+  - \"v\" / \"^\"        — Durch Treffer navigieren.
+  - \"v Ersetzen\"     — Ersetzen-Feld ein-/ausblenden.
   - \"Ersetzen\"       — Aktuelles Vorkommen ersetzen.
   - \"Alle ersetzen\"  — Alle Vorkommen auf einmal ersetzen.
   - Statusanzeige rechts neben den Buttons:
-      «Treffer N von M — Zeile Z» zeigt Treffer N (von M gesamt) auf Zeile Z.
+      «Treffer N von M - Zeile Z» zeigt Treffer N (von M gesamt) auf Zeile Z.
       «Keine Treffer» wird angezeigt, wenn kein Ergebnis gefunden wurde.
-  - Alle Treffer werden dezent markiert; der aktuelle Treffer wird stärker hervorgehoben.
+  - Alle Treffer werden dezent markiert; der aktuelle Treffer wird staerker hervorgehoben.
+
+## Tooltips
+Tooltips erscheinen beim Überfahren einer Schaltfläche mit der Maus.
+  - Im oberen Bildschirmbereich werden Tooltips oberhalb des Mauszeigers angezeigt.
+  - Im unteren Bildschirmbereich (unterhalb der Fenstermitte) erscheinen Tooltips
+    links vom Mauszeiger, damit sie die Schaltflächen nicht verdecken.
 
 ## Kontextmenü (Rechtsklick)
   - Im Editor-Textfeld und im Ausgabe-Feld per Rechtsklick öffnen.
   - Kopieren, Ausschneiden (nur Editor), Einfügen (nur Editor), Alles auswählen.
-  - Im Editor zusätzlich: \"Suchen/Ersetzen…\" öffnet das Find-Replace-Panel.
-  - Schließt sich bei Klick außerhalb des Menüs.
+  - Im Editor zusätzlich: \"Suchen/Ersetzen...\" öffnet das Find-Replace-Panel.
+  - Schliessen sich bei Klick ausserhalb des Menüs.
 
 ## Zeitanzeige
   Laufzeiten unter 1 Sekunde werden als \"xxx ms\" angezeigt,
