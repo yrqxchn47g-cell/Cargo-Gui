@@ -41,6 +41,7 @@
 //! change (file is tiny, so I/O is negligible).
 
 mod config;
+mod icons;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -1431,42 +1432,66 @@ impl App {
             .into();
 
             // Build menu items.
-            let copy_btn = button("📋 Kopieren (Copy)")
-                .on_press(Msg::ContextCopy)
-                .width(Length::Fill)
-                .padding([4, 10])
-                .style(readable_button_style);
-            let selectall_btn = button("☰ Alles auswählen (Select All)")
-                .on_press(Msg::ContextSelectAll)
-                .width(Length::Fill)
-                .padding([4, 10])
-                .style(readable_button_style);
+            let copy_btn = button(
+                row![icons::icon(icons::COPY, 14.0), text("Kopieren (Copy)")]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::ContextCopy)
+            .width(Length::Fill)
+            .padding([4, 10])
+            .style(readable_button_style);
+            let selectall_btn = button(
+                row![icons::icon(icons::SELECT_ALL, 14.0), text("Alles auswählen (Select All)")]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::ContextSelectAll)
+            .width(Length::Fill)
+            .padding([4, 10])
+            .style(readable_button_style);
 
             let mut menu_col = column![copy_btn, selectall_btn].spacing(2);
 
             if is_editor {
-                let cut_btn = button("✂ Ausschneiden (Cut)")
-                    .on_press(Msg::ContextCut)
-                    .width(Length::Fill)
-                    .padding([4, 10])
-                    .style(readable_button_style);
-                let paste_btn = button("📄 Einfügen (Paste)")
-                    .on_press(Msg::ContextPaste)
-                    .width(Length::Fill)
-                    .padding([4, 10])
-                    .style(readable_button_style);
-                let find_btn = button("🔍 Suchen/Ersetzen…")
-                    .on_press(Msg::ToggleFindReplace)
-                    .width(Length::Fill)
-                    .padding([4, 10])
-                    .style(readable_button_style);
+                let cut_btn = button(
+                    row![icons::icon(icons::CUT, 14.0), text("Ausschneiden (Cut)")]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press(Msg::ContextCut)
+                .width(Length::Fill)
+                .padding([4, 10])
+                .style(readable_button_style);
+                let paste_btn = button(
+                    row![icons::icon(icons::PASTE, 14.0), text("Einfügen (Paste)")]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press(Msg::ContextPaste)
+                .width(Length::Fill)
+                .padding([4, 10])
+                .style(readable_button_style);
+                let find_btn = button(
+                    row![icons::icon(icons::SEARCH, 14.0), text("Suchen/Ersetzen…")]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press(Msg::ToggleFindReplace)
+                .width(Length::Fill)
+                .padding([4, 10])
+                .style(readable_button_style);
                 menu_col = menu_col.push(cut_btn).push(paste_btn).push(find_btn);
             } else {
-                let output_find_btn = button("🔍 Suchen…")
-                    .on_press(Msg::ToggleOutputFind)
-                    .width(Length::Fill)
-                    .padding([4, 10])
-                    .style(readable_button_style);
+                let output_find_btn = button(
+                    row![icons::icon(icons::SEARCH, 14.0), text("Suchen…")]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press(Msg::ToggleOutputFind)
+                .width(Length::Fill)
+                .padding([4, 10])
+                .style(readable_button_style);
                 menu_col = menu_col.push(output_find_btn);
             }
 
@@ -1560,7 +1585,7 @@ impl App {
 
     fn view_topbar(&self) -> Element<'_, Msg> {
         let menu_btn = hover_tip(
-            button(text("☰").size(self.config.button_font_size)).padding([4, 10]),
+            button(icons::icon(icons::MENU, self.config.button_font_size)).padding([4, 10]),
             "Hauptmenü — Schnellzugriff auf Ansichten und Funktionen".to_string(),
         );
 
@@ -1584,44 +1609,64 @@ impl App {
     fn view_footer(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let settings_btn = hover_tip(
-            button(text("⚙ Einstellungen").size(fs))
-                .on_press(Msg::NavigateTo(View::Settings))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::SETTINGS, fs), text("Einstellungen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Settings))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Einstellungen öffnen — Standard-Pfad, Theme und Button-Schriftgröße festlegen".to_string(),
         );
 
         let editor_btn = hover_tip(
-            button(text("✏ Editor").size(fs))
-                .on_press(Msg::NavigateTo(View::Editor))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::EDIT, fs), text("Editor").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Editor))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Datei-Editor öffnen — Texte bearbeiten, Tabs verwalten, Suchen/Ersetzen".to_string(),
         );
 
         let help_btn = hover_tip(
-            button(text("? Hilfe").size(fs))
-                .on_press(Msg::NavigateTo(View::Help))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::HELP, fs), text("Hilfe").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Help))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Bedienungsanleitung öffnen — alle Funktionen im Überblick".to_string(),
         );
 
         let quit_btn = hover_tip(
-            button(text("✕ Beenden").size(fs))
-                .on_press(Msg::Quit)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::CLOSE, fs), text("Beenden").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::Quit)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Anwendung beenden (alle ungespeicherten Änderungen gehen verloren)".to_string(),
         );
 
         let status_text = text(format!("Status: {}", self.status)).size(13);
 
         let about_btn = hover_tip(
-            button(text("ℹ Über").size(fs))
-                .on_press(Msg::NavigateTo(View::About))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::INFO, fs), text("Über").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::About))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Über Cargo GUI — Versionsinformationen und Kontakt".to_string(),
         );
 
@@ -1648,10 +1693,14 @@ impl App {
             .padding(5);
 
         let browse_btn = hover_tip(
-            button(text("📂 Durchsuchen").size(fs))
-                .on_press(Msg::BrowsePath)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::FOLDER, fs), text("Durchsuchen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::BrowsePath)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Projektordner auswählen — öffnet einen nativen Ordnerauswahl-Dialog".to_string(),
         );
 
@@ -1683,18 +1732,26 @@ impl App {
             .width(ARGS_INPUT_WIDTH);
 
         let run_btn = hover_tip(
-            button(text("▶ Ausführen").size(fs))
-                .on_press_maybe((!self.running).then_some(Msg::Run))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::PLAY, fs), text("Ausführen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press_maybe((!self.running).then_some(Msg::Run))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Cargo-Befehl ausführen — startet den im Argumentfeld eingetragenen Befehl".to_string(),
         );
 
         let stop_btn = hover_tip(
-            button(text("■ Stop").size(fs))
-                .on_press_maybe(self.running.then_some(Msg::Stop))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::STOP, fs), text("Stop").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press_maybe(self.running.then_some(Msg::Stop))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Laufenden Cargo-Prozess abbrechen".to_string(),
         );
 
@@ -1833,15 +1890,15 @@ impl App {
                 .on_submit(Msg::OutputFindNext)
                 .padding([4, 6])
                 .width(180);
-            let next_btn = button("▼")
+            let next_btn = button(icons::icon(icons::ARROW_DOWN, 14.0))
                 .on_press(Msg::OutputFindNext)
                 .padding([4, 8])
                 .style(readable_button_style);
-            let prev_btn = button("▲")
+            let prev_btn = button(icons::icon(icons::ARROW_UP, 14.0))
                 .on_press(Msg::OutputFindPrev)
                 .padding([4, 8])
                 .style(readable_button_style);
-            let close_btn = button("✕")
+            let close_btn = button(icons::icon_white(icons::CLOSE, 14.0))
                 .on_press(Msg::ToggleOutputFind)
                 .padding([4, 6])
                 .style(button::danger);
@@ -1902,10 +1959,14 @@ impl App {
     fn view_settings(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button(text("← Zurück").size(fs))
-                .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::BACK, fs), text("Zurück").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
@@ -1944,14 +2005,14 @@ impl App {
 
         // -- Button font size row --
         let font_dec_btn = hover_tip(
-            button(text("−").size(16))
+            button(icons::icon(icons::MINUS, 16.0))
                 .on_press_maybe((fs > 10.0).then_some(Msg::ButtonFontSizeChanged(-1.0)))
                 .padding([4, 10])
                 .style(readable_button_style),
             "Schriftgröße der Buttons verkleinern".to_string(),
         );
         let font_inc_btn = hover_tip(
-            button(text("+").size(16))
+            button(icons::icon(icons::PLUS, 16.0))
                 .on_press_maybe((fs < 24.0).then_some(Msg::ButtonFontSizeChanged(1.0)))
                 .padding([4, 10])
                 .style(readable_button_style),
@@ -2003,44 +2064,68 @@ impl App {
     fn view_editor(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button(text("← Zurück").size(fs))
-                .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::BACK, fs), text("Zurück").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
         let new_tab_btn = hover_tip(
-            button(text("+ Neu").size(fs))
-                .on_press(Msg::TabNew)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::PLUS, fs), text("Neu").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::TabNew)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Neuen leeren Tab im Editor öffnen".to_string(),
         );
 
         let open_btn = hover_tip(
-            button(text("📂 Öffnen").size(fs))
-                .on_press(Msg::OpenFile)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::FOLDER, fs), text("Öffnen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::OpenFile)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Datei öffnen — öffnet einen nativen Dateiauswahl-Dialog".to_string(),
         );
 
         let save_btn = hover_tip(
-            button(text("💾 Speichern").size(fs))
-                .on_press(Msg::SaveFile)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::SAVE, fs), text("Speichern").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::SaveFile)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Aktiven Tab speichern — bei Untitled wird ein Speichern-Dialog geöffnet".to_string(),
         );
 
-        let find_replace_toggle_label = if self.find_replace_open {
-            "🔍 Suchen ✕"
+        let find_btn_content = if self.find_replace_open {
+            row![
+                icons::icon(icons::SEARCH, fs),
+                text("Suchen").size(fs),
+                icons::icon(icons::CLOSE, fs),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center)
         } else {
-            "🔍 Suchen"
+            row![icons::icon(icons::SEARCH, fs), text("Suchen").size(fs)]
+                .spacing(4)
+                .align_y(iced::Alignment::Center)
         };
         let find_btn = hover_tip(
-            button(text(find_replace_toggle_label).size(fs))
+            button(find_btn_content)
                 .on_press(Msg::ToggleFindReplace)
                 .padding([5, 10])
                 .style(readable_button_style),
@@ -2073,7 +2158,7 @@ impl App {
                 );
 
                 let close_btn = hover_tip(
-                    button(text("✕").size(11))
+                    button(icons::icon_white(icons::CLOSE, 11.0))
                         .on_press(Msg::TabClose(i))
                         .padding([4, 6])
                         .style(button::danger),
@@ -2099,29 +2184,37 @@ impl App {
                 "Suchtext eingeben (Enter = Nächstes, Shift+Enter = Vorheriges)".to_string(),
             );
             let next_btn = hover_tip(
-                button("▼")
+                button(icons::icon(icons::ARROW_DOWN, 14.0))
                     .on_press(Msg::FindNext)
                     .padding([4, 8])
                     .style(readable_button_style),
                 "Zum nächsten Treffer springen (Enter)".to_string(),
             );
             let prev_btn = hover_tip(
-                button("▲")
+                button(icons::icon(icons::ARROW_UP, 14.0))
                     .on_press(Msg::FindPrev)
                     .padding([4, 8])
                     .style(readable_button_style),
                 "Zum vorherigen Treffer springen (Shift+Enter)".to_string(),
             );
-            let toggle_replace_label = if self.find_show_replace { "▲ Ersetzen" } else { "▼ Ersetzen" };
+            let toggle_replace_icon = if self.find_show_replace {
+                icons::icon(icons::ARROW_UP, 14.0)
+            } else {
+                icons::icon(icons::ARROW_DOWN, 14.0)
+            };
             let toggle_replace_btn = hover_tip(
-                button(toggle_replace_label)
-                    .on_press(Msg::ToggleReplaceField)
-                    .padding([4, 8])
-                    .style(readable_button_style),
+                button(
+                    row![toggle_replace_icon, text("Ersetzen")]
+                        .spacing(4)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press(Msg::ToggleReplaceField)
+                .padding([4, 8])
+                .style(readable_button_style),
                 "Ersetzen-Feld ein-/ausblenden (Ctrl+H)".to_string(),
             );
             let close_btn = hover_tip(
-                button("✕")
+                button(icons::icon_white(icons::CLOSE, 14.0))
                     .on_press(Msg::CloseInlineFind)
                     .padding([4, 6])
                     .style(button::danger),
@@ -2131,7 +2224,7 @@ impl App {
 
             // First row: search field + navigation + status + close.
             let find_row = row![
-                text("🔍").size(12),
+                icons::icon(icons::SEARCH, 14.0),
                 find_input,
                 prev_btn,
                 next_btn,
@@ -2171,7 +2264,7 @@ impl App {
                     "Alle Vorkommen im aktiven Tab auf einmal ersetzen".to_string(),
                 );
                 let replace_row = row![
-                    text("↺").size(12),
+                    icons::icon(icons::REPLACE, 14.0),
                     replace_input,
                     replace_btn,
                     replace_all_btn,
@@ -2277,18 +2370,26 @@ impl App {
     fn view_help(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button(text("← Zurück").size(fs))
-                .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::BACK, fs), text("Zurück").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
         let pdf_btn = hover_tip(
-            button(text("📄 PDF öffnen").size(fs))
-                .on_press(Msg::OpenHelpPdf)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::DOCUMENT, fs), text("PDF öffnen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::OpenHelpPdf)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Bedienungsanleitung als PDF-Dokument öffnen".to_string(),
         );
 
@@ -2313,10 +2414,14 @@ impl App {
     fn view_about(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button(text("← Zurück").size(fs))
-                .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![icons::icon(icons::BACK, fs), text("Zurück").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
@@ -2909,7 +3014,7 @@ Cargo GUI — Bedienungsanleitung
 Cargo GUI ist eine grafische Benutzeroberfläche für den Rust-Paketmanager Cargo.
 
 ## Projektverzeichnis
-Geben Sie den Pfad zu Ihrem Rust-Projekt ein oder klicken Sie auf \"📂 Durchsuchen\",
+Geben Sie den Pfad zu Ihrem Rust-Projekt ein oder klicken Sie auf \"Durchsuchen\",
 um einen Ordner auszuwählen. Mit \"Als Start\" speichern Sie den Pfad als Standard.
 
 ## Argumente
@@ -2949,15 +3054,15 @@ Die Ausgabe des letzten Cargo-Laufs wird hier angezeigt. Sie können Text
 selektieren und kopieren. Mit \"Ausgabe löschen\" wird die Ausgabe zurückgesetzt.
 
 ## Stop
-Während ein Cargo-Prozess läuft, können Sie ihn mit \"■ Stop\" abbrechen.
+Während ein Cargo-Prozess läuft, können Sie ihn mit \"Stop\" abbrechen.
 
 ## Einstellungen
-Unter \"⚙ Einstellungen\" können Sie den Standard-Projektpfad festlegen,
+Unter \"Einstellungen\" können Sie den Standard-Projektpfad festlegen,
 das Theme auswählen, die Button-Schriftgröße anpassen und Einstellungen zurücksetzen.
 Einstellungen werden sofort automatisch gespeichert.
 
 Button-Schriftgröße:
-  Mit den Schaltflächen \"−\" und \"+\" lässt sich die Schriftgröße der Buttons
+  Mit den Minus- und Plus-Schaltflächen lässt sich die Schriftgröße der Buttons
   stufenweise anpassen (Bereich: 10–24 pt, Standard: 13 pt).
   Die Einstellung wird gespeichert und beim nächsten Start wieder angewendet.
 
@@ -2969,14 +3074,14 @@ Verfügbare Themes:
   Moonfly · Nightfly · Oxocarbon
 
 ## Editor
-Unter \"✏ Editor\" steht ein Texteditor mit Tabs zur Verfügung.
-  - \"+ Neu\"        — Neuen leeren Tab öffnen
-  - \"📂 Öffnen\"    — Datei laden (öffnet nativen Dateiauswahl-Dialog)
-  - \"💾 Speichern\" — Aktiven Tab speichern; bei Untitled-Dateien wird ein
+Unter \"Editor\" steht ein Texteditor mit Tabs zur Verfügung.
+  - \"Neu\"         — Neuen leeren Tab öffnen
+  - \"Öffnen\"      — Datei laden (öffnet nativen Dateiauswahl-Dialog)
+  - \"Speichern\"   — Aktiven Tab speichern; bei Untitled-Dateien wird ein
                        nativer Speichern-Dialog geöffnet.
-  - \"✕\"            — Tab schließen
+  - Schließen-Symbol — Tab schließen
   - \"*\"            im Tabtitel zeigt ungespeicherte Änderungen an.
-  - \"🔍 Suchen\"    — Inline-Suchleiste ein-/ausblenden (auch per Ctrl+F / Ctrl+H).
+  - \"Suchen\"      — Inline-Suchleiste ein-/ausblenden (auch per Ctrl+F / Ctrl+H).
   - Rechtsklick im Editor öffnet ein Kontextmenü mit Kopieren, Ausschneiden,
     Einfügen, Alles auswählen und Suchen/Ersetzen.
 
@@ -2986,8 +3091,8 @@ Die Inline-Suchleiste öffnet sich unterhalb der Tab-Leiste:
   - Ctrl+H           — Suchleiste öffnen mit Ersetzen-Feld.
   - Esc              — Suchleiste schließen.
   - Suchfeld: Suchtext eingeben (Enter = Nächstes, Shift+Enter = Vorheriges).
-  - \"▼\" / \"▲\"        — Durch Treffer navigieren.
-  - \"▼ Ersetzen\"     — Ersetzen-Feld ein-/ausblenden.
+  - Pfeil-ab / Pfeil-auf — Durch Treffer navigieren.
+  - \"Ersetzen\" (mit Pfeil) — Ersetzen-Feld ein-/ausblenden.
   - \"Ersetzen\"       — Aktuelles Vorkommen ersetzen.
   - \"Alle ersetzen\"  — Alle Vorkommen auf einmal ersetzen.
   - Statusanzeige rechts neben den Buttons:
