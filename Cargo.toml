@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 iced = { version = "0.13", features = ["tokio", "image"] }
+iced_fonts = { version = "0.2", features = ["bootstrap"] }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 rfd = "0.15"
