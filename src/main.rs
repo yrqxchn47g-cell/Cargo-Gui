@@ -100,6 +100,15 @@ const FIND_TEST_GREEN_COLOR: Color = Color { r: 0.0, g: 1.0, b: 0.5, a: 0.40 };
 /// Test highlight color: red.
 const FIND_TEST_RED_COLOR: Color = Color { r: 1.0, g: 0.2, b: 0.2, a: 0.40 };
 
+/// Background colour for error diagnostic links (red).
+const DIAG_ERROR_COLOR: Color = Color { r: 0.80, g: 0.15, b: 0.15, a: 0.90 };
+
+/// Background colour for warning diagnostic links (amber).
+const DIAG_WARN_COLOR: Color = Color { r: 0.70, g: 0.50, b: 0.05, a: 0.90 };
+
+/// Background colour for note/other diagnostic links (blue).
+const DIAG_NOTE_COLOR: Color = Color { r: 0.15, g: 0.40, b: 0.78, a: 0.90 };
+
 /// Ghost image shown in the About dialog.
 const GHOST_GIF: &[u8] = include_bytes!("../assets/Ghost.gif");
 
@@ -220,6 +229,33 @@ impl EditorTab {
 }
 
 // ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+/// Severity level of a parsed cargo diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiagnosticLevel {
+    Error,
+    Warning,
+    Note,
+}
+
+/// A single parsed cargo diagnostic (error / warning / note) that can be
+/// rendered as a clickable link in the output panel.
+#[derive(Debug, Clone)]
+struct Diagnostic {
+    level: DiagnosticLevel,
+    /// Absolute path to the source file.
+    file: PathBuf,
+    /// 1-based line number as reported by cargo.
+    line: usize,
+    /// 1-based column number as reported by cargo.
+    column: usize,
+    /// The human-readable message from the diagnostic header line.
+    message: String,
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -326,6 +362,13 @@ struct App {
     mouse_x: f32,
     /// Current mouse cursor Y position (in logical pixels).
     mouse_y: f32,
+
+    // --- Diagnostics ---
+    /// Parsed diagnostics accumulated during the last cargo run.
+    diagnostics: Vec<Diagnostic>,
+    /// The most recent diagnostic header line (level + message) waiting to be
+    /// paired with the following ` --> file:line:col` location line.
+    pending_diag_level: Option<(DiagnosticLevel, String)>,
 }
 
 impl App {
@@ -373,6 +416,8 @@ impl App {
                 tooltip_text: None,
                 mouse_x: 0.0,
                 mouse_y: 0.0,
+                diagnostics: Vec::new(),
+                pending_diag_level: None,
             },
             Task::none(),
         )
@@ -523,6 +568,12 @@ enum Msg {
     // --- Find highlight color ---
     /// Change the highlight color of the current find match in the editor.
     SetFindTestColor(Color),
+
+    // --- Diagnostics ---
+    /// Open the file from a diagnostic link in the editor and jump to line:col.
+    OpenDiagnostic { path: PathBuf, line: usize, col: usize },
+    /// Async result of reading the file for an `OpenDiagnostic` action.
+    DiagnosticFileLoaded(Option<(PathBuf, String, usize, usize)>),
 }
 
 // ---------------------------------------------------------------------------
@@ -615,6 +666,9 @@ impl App {
                 self.run_start = Some(Instant::now());
                 self.display_elapsed_ms = 0;
                 self.status = "Läuft…".to_string();
+                // Reset diagnostics for the new run.
+                self.diagnostics.clear();
+                self.pending_diag_level = None;
 
                 let (stop_tx, stop_rx) = oneshot::channel::<()>();
                 self.stop_tx = Some(stop_tx);
@@ -639,6 +693,25 @@ impl App {
             Msg::Append { line, job_id } => {
                 if job_id != self.current_job_id {
                     return Task::none();
+                }
+                // Parse cargo diagnostics on the fly.
+                if let Some((level, msg)) = parse_diagnostic_line(&line) {
+                    self.pending_diag_level = Some((level, msg));
+                } else if let Some((file, diag_line, col)) = parse_location_line(&line) {
+                    if let Some((level, msg)) = self.pending_diag_level.take() {
+                        let full_path = if file.is_absolute() {
+                            file
+                        } else {
+                            PathBuf::from(&self.project_path).join(&file)
+                        };
+                        self.diagnostics.push(Diagnostic {
+                            level,
+                            file: full_path,
+                            line: diag_line,
+                            column: col,
+                            message: msg,
+                        });
+                    }
                 }
                 self.output_lines.push_back(line);
                 if self.output_lines.len() > MAX_LINES {
@@ -681,6 +754,8 @@ impl App {
                 self.output_trimmed = false;
                 self.status = "Bereit".to_string();
                 self.output_highlight_line = None;
+                self.diagnostics.clear();
+                self.pending_diag_level = None;
                 Task::none()
             }
 
@@ -1391,6 +1466,65 @@ impl App {
                 self.find_test_color = c;
                 Task::none()
             }
+
+            // --- Diagnostics ---
+            Msg::OpenDiagnostic { path, line, col } => {
+                // Resolve the path relative to the project directory.
+                let full_path = if path.is_absolute() {
+                    path
+                } else {
+                    PathBuf::from(&self.project_path).join(&path)
+                };
+                Task::perform(
+                    async move {
+                        let content = tokio::fs::read_to_string(&full_path).await.ok()?;
+                        Some((full_path, content, line, col))
+                    },
+                    Msg::DiagnosticFileLoaded,
+                )
+            }
+
+            Msg::DiagnosticFileLoaded(maybe) => {
+                if let Some((path, file_text, line, col)) = maybe {
+                    // Switch to an existing tab or open a new one.
+                    if let Some(idx) = self
+                        .editor_tabs
+                        .iter()
+                        .position(|t| t.path.as_deref() == Some(&path))
+                    {
+                        self.active_tab = idx;
+                    } else {
+                        self.editor_tabs.push(EditorTab::from_file(path, &file_text));
+                        self.active_tab = self.editor_tabs.len() - 1;
+                    }
+                    // Navigate to the target line and column (cargo reports 1-based).
+                    let target_line = line.saturating_sub(1);
+                    let target_col = col.saturating_sub(1);
+                    if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
+                        tab.content.perform(text_editor::Action::Move(
+                            text_editor::Motion::DocumentStart,
+                        ));
+                        for _ in 0..target_line {
+                            tab.content.perform(text_editor::Action::Move(
+                                text_editor::Motion::Down,
+                            ));
+                        }
+                        tab.content.perform(text_editor::Action::Move(
+                            text_editor::Motion::Home,
+                        ));
+                        for _ in 0..target_col {
+                            tab.content.perform(text_editor::Action::Move(
+                                text_editor::Motion::Right,
+                            ));
+                        }
+                    }
+                    self.editor_highlight_line = Some(target_line);
+                    // Switch to the Editor view.
+                    self.current_view = View::Editor;
+                    return scroll_editor_to_line(target_line);
+                }
+                Task::none()
+            }
         }
     }
 }
@@ -1872,7 +2006,74 @@ impl App {
             if let Some(fp) = output_find_panel {
                 col = col.push(fp);
             }
-            col.push(output)
+            col = col.push(output);
+
+            // -- Diagnostics panel --
+            if !self.diagnostics.is_empty() {
+                let header = text(
+                    format!("Diagnosen ({}): — klicken zum Öffnen im Editor", self.diagnostics.len())
+                )
+                .size(12);
+
+                let diag_items: Vec<Element<'_, Msg>> = self
+                    .diagnostics
+                    .iter()
+                    .map(|diag| {
+                        let (level_str, color) = match diag.level {
+                            DiagnosticLevel::Error   => ("FEHLER",   DIAG_ERROR_COLOR),
+                            DiagnosticLevel::Warning => ("WARNUNG",  DIAG_WARN_COLOR),
+                            DiagnosticLevel::Note    => ("HINWEIS",  DIAG_NOTE_COLOR),
+                        };
+                        let file_name = diag
+                            .file
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| diag.file.to_string_lossy().into_owned());
+                        let label = format!(
+                            "[{}] {}:{}:{} — {}",
+                            level_str, file_name, diag.line, diag.column, diag.message
+                        );
+                        let tooltip = format!(
+                            "{}\nDatei: {}\nZeile {}, Spalte {}",
+                            diag.message,
+                            diag.file.display(),
+                            diag.line,
+                            diag.column
+                        );
+                        let path = diag.file.clone();
+                        let line = diag.line;
+                        let col  = diag.column;
+                        hover_tip(
+                            button(text(label).size(12))
+                                .on_press(Msg::OpenDiagnostic { path, line, col })
+                                .padding([3, 8])
+                                .width(Length::Fill)
+                                .style(move |_theme: &iced::Theme, _status: button::Status| {
+                                    button::Style {
+                                        background: Some(iced::Background::Color(color)),
+                                        text_color: Color::WHITE,
+                                        border: iced::border::rounded(2),
+                                        ..Default::default()
+                                    }
+                                }),
+                            tooltip,
+                        )
+                    })
+                    .collect();
+
+                let diag_list = column(diag_items).spacing(2).width(Length::Fill);
+                let diag_scroll = scrollable(diag_list)
+                    .height(Length::Fixed(160.0))
+                    .width(Length::Fill);
+
+                col = col.push(
+                    column![header, diag_scroll]
+                        .spacing(4)
+                        .padding([4, 0])
+                );
+            }
+
+            col
         };
 
         // -- Layout: path row spans full width; left side has inputs + commands; right side is larger output --
@@ -2799,6 +3000,61 @@ fn output_find_status_text(current: usize, total: usize, hl_line: Option<usize>)
     }
 }
 
+/// Parse a cargo diagnostic header line (e.g. `error[E0425]: message` or
+/// `warning: message`) and return the [`DiagnosticLevel`] together with the
+/// human-readable message.  Returns `None` for lines that are not diagnostic
+/// headers.
+fn parse_diagnostic_line(line: &str) -> Option<(DiagnosticLevel, String)> {
+    let (level, rest) = if let Some(r) = line.strip_prefix("error") {
+        (DiagnosticLevel::Error, r)
+    } else if let Some(r) = line.strip_prefix("warning") {
+        (DiagnosticLevel::Warning, r)
+    } else if let Some(r) = line.strip_prefix("note") {
+        (DiagnosticLevel::Note, r)
+    } else {
+        return None;
+    };
+
+    // Accept `error[E0xxx]: msg`, `error: msg`, but NOT `error` alone (no colon).
+    let msg = if let Some(r) = rest.strip_prefix('[') {
+        // `[E0xxx]: msg` → skip to after `]: `
+        r.splitn(2, "]: ").nth(1)?.to_string()
+    } else if let Some(r) = rest.strip_prefix(": ") {
+        r.to_string()
+    } else {
+        return None;
+    };
+
+    // Filter out meta-lines like "error: aborting due to N previous errors"
+    // that do not correspond to a real source location.
+    if msg.starts_with("aborting due to") || msg.starts_with("could not compile") {
+        return None;
+    }
+
+    Some((level, msg))
+}
+
+/// Parse a cargo location line of the form `  --> relative/path.rs:line:col`
+/// and return `(path, line, column)`.  Returns `None` for any other line.
+///
+/// `rsplitn(3, ':')` is used to split from the right so that the file path
+/// portion correctly retains any embedded colons (e.g. Windows drive letters
+/// `C:\...` or rare Unix filenames with colons).
+fn parse_location_line(line: &str) -> Option<(PathBuf, usize, usize)> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("--> ")?;
+    // `rest` is now `"relative/path.rs:5:3"` (or similar).
+    // Split from the right to handle Windows paths that may contain `:`.
+    let mut parts = rest.rsplitn(3, ':');
+    let col_str  = parts.next()?;
+    let line_str = parts.next()?;
+    let file_str = parts.next()?;
+    let col:  usize = col_str.trim().parse().ok()?;
+    let ln:   usize = line_str.trim().parse().ok()?;
+    let file = PathBuf::from(file_str.trim());
+    Some((file, ln, col))
+}
+
 /// [`Msg::Append`] messages, followed by a single [`Msg::Done`].
 ///
 /// `stop_rx`: receiving `()` kills the child process and sends
@@ -3014,7 +3270,76 @@ mod tests {
     use super::{
         byte_offset_to_position, collect_all_match_lines, editor_find_status_text,
         find_match_byte_offset, format_duration, output_find_status_text,
+        parse_diagnostic_line, parse_location_line, DiagnosticLevel,
     };
+
+    // --- parse_diagnostic_line ---
+
+    #[test]
+    fn parse_diag_error_with_code() {
+        let (level, msg) = parse_diagnostic_line("error[E0425]: cannot find value `x`").unwrap();
+        assert!(matches!(level, DiagnosticLevel::Error));
+        assert_eq!(msg, "cannot find value `x`");
+    }
+
+    #[test]
+    fn parse_diag_error_no_code() {
+        let (level, msg) = parse_diagnostic_line("error: mismatched types").unwrap();
+        assert!(matches!(level, DiagnosticLevel::Error));
+        assert_eq!(msg, "mismatched types");
+    }
+
+    #[test]
+    fn parse_diag_warning() {
+        let (level, msg) = parse_diagnostic_line("warning: unused variable: `x`").unwrap();
+        assert!(matches!(level, DiagnosticLevel::Warning));
+        assert_eq!(msg, "unused variable: `x`");
+    }
+
+    #[test]
+    fn parse_diag_note() {
+        let (level, msg) = parse_diagnostic_line("note: see issue #12345").unwrap();
+        assert!(matches!(level, DiagnosticLevel::Note));
+        assert_eq!(msg, "see issue #12345");
+    }
+
+    #[test]
+    fn parse_diag_aborting_filtered_out() {
+        // "aborting due to" lines must not be treated as real diagnostics.
+        assert!(parse_diagnostic_line("error: aborting due to 3 previous errors").is_none());
+    }
+
+    #[test]
+    fn parse_diag_non_diag_line() {
+        assert!(parse_diagnostic_line("  |").is_none());
+        assert!(parse_diagnostic_line(" --> src/main.rs:5:3").is_none());
+        assert!(parse_diagnostic_line("Compiling foo v0.1.0").is_none());
+    }
+
+    // --- parse_location_line ---
+
+    #[test]
+    fn parse_location_basic() {
+        let (file, line, col) = parse_location_line(" --> src/main.rs:5:3").unwrap();
+        assert_eq!(file.to_str().unwrap(), "src/main.rs");
+        assert_eq!(line, 5);
+        assert_eq!(col, 3);
+    }
+
+    #[test]
+    fn parse_location_leading_spaces() {
+        let (file, line, col) = parse_location_line("   --> lib/foo.rs:100:1").unwrap();
+        assert_eq!(file.to_str().unwrap(), "lib/foo.rs");
+        assert_eq!(line, 100);
+        assert_eq!(col, 1);
+    }
+
+    #[test]
+    fn parse_location_non_location_line() {
+        assert!(parse_location_line("  |").is_none());
+        assert!(parse_location_line("error[E0425]: msg").is_none());
+        assert!(parse_location_line("5 | let x = 1;").is_none());
+    }
 
     #[test]
     fn format_duration_below_1000ms() {
