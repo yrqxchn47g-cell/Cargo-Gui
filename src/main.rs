@@ -2755,11 +2755,14 @@ impl App {
         let author_value = text("Jürgen Schneider").size(14);
         let email_label = text("E-Mail:").size(13);
         let email_value = text("juergen.sr@t-online.de").size(14);
+        let license_label = text("Lizenz:").size(13);
+        let license_value = text("Public Domain").size(14);
 
         let info_col = column![
             title,
             row![author_label, author_value].spacing(8).align_y(iced::Alignment::Center),
             row![email_label, email_value].spacing(8).align_y(iced::Alignment::Center),
+            row![license_label, license_value].spacing(8).align_y(iced::Alignment::Center),
         ]
         .spacing(8)
         .padding([0, 16]);
