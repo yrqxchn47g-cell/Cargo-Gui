@@ -378,6 +378,8 @@ struct App {
     /// The most recent diagnostic header line (level + message) waiting to be
     /// paired with the following ` --> file:line:col` location line.
     pending_diag_level: Option<(DiagnosticLevel, String)>,
+    /// Highlight colour to use for the diagnostic line in the editor.
+    diag_highlight_color: Color,
 }
 
 impl App {
@@ -428,6 +430,7 @@ impl App {
                 window_height: 600.0,
                 diagnostics: Vec::new(),
                 pending_diag_level: None,
+                diag_highlight_color: DIAG_ERROR_COLOR,
             },
             Task::none(),
         )
@@ -583,9 +586,9 @@ enum Msg {
 
     // --- Diagnostics ---
     /// Open the file from a diagnostic link in the editor and jump to line:col.
-    OpenDiagnostic { path: PathBuf, line: usize, col: usize },
+    OpenDiagnostic { path: PathBuf, line: usize, col: usize, level: DiagnosticLevel },
     /// Async result of reading the file for an `OpenDiagnostic` action.
-    DiagnosticFileLoaded(Option<(PathBuf, String, usize, usize)>),
+    DiagnosticFileLoaded(Option<(PathBuf, String, usize, usize, DiagnosticLevel)>),
 }
 
 // ---------------------------------------------------------------------------
@@ -1485,7 +1488,7 @@ impl App {
             }
 
             // --- Diagnostics ---
-            Msg::OpenDiagnostic { path, line, col } => {
+            Msg::OpenDiagnostic { path, line, col, level } => {
                 // Resolve the path relative to the project directory.
                 let full_path = if path.is_absolute() {
                     path
@@ -1495,14 +1498,14 @@ impl App {
                 Task::perform(
                     async move {
                         let content = tokio::fs::read_to_string(&full_path).await.ok()?;
-                        Some((full_path, content, line, col))
+                        Some((full_path, content, line, col, level))
                     },
                     Msg::DiagnosticFileLoaded,
                 )
             }
 
             Msg::DiagnosticFileLoaded(maybe) => {
-                if let Some((path, file_text, line, col)) = maybe {
+                if let Some((path, file_text, line, col, level)) = maybe {
                     // Switch to an existing tab or open a new one.
                     if let Some(idx) = self
                         .editor_tabs
@@ -1536,6 +1539,11 @@ impl App {
                         }
                     }
                     self.editor_highlight_line = Some(target_line);
+                    self.diag_highlight_color = match level {
+                        DiagnosticLevel::Error   => DIAG_ERROR_COLOR,
+                        DiagnosticLevel::Warning => DIAG_WARN_COLOR,
+                        DiagnosticLevel::Note    => DIAG_NOTE_COLOR,
+                    };
                     // Switch to the Editor view.
                     self.current_view = View::Editor;
                     return scroll_editor_to_line(target_line);
@@ -2126,9 +2134,10 @@ impl App {
                         let path = diag.file.clone();
                         let line = diag.line;
                         let col  = diag.column;
+                        let level = diag.level;
                         hover_tip(
                             button(text(label).size(12))
-                                .on_press(Msg::OpenDiagnostic { path, line, col })
+                                .on_press(Msg::OpenDiagnostic { path, line, col, level })
                                 .padding([3, 8])
                                 .width(Length::Fill)
                                 .style(move |_theme: &iced::Theme, _status: button::Status| {
@@ -2367,7 +2376,7 @@ impl App {
                 );
 
                 let close_btn = hover_tip(
-                    button(text("✕").size(11))
+                    button(bi(Bootstrap::X).size(11))
                         .on_press(Msg::TabClose(i))
                         .padding([4, 6])
                         .style(button::danger),
@@ -2415,7 +2424,7 @@ impl App {
                 "Ersetzen-Feld ein-/ausblenden (Ctrl+H)".to_string(),
             );
             let close_btn = hover_tip(
-                button("✕")
+                button(bi(Bootstrap::X).size(11))
                     .on_press(Msg::CloseInlineFind)
                     .padding([4, 6])
                     .style(button::danger),
@@ -2495,6 +2504,10 @@ impl App {
                     self.find_current_match,
                     self.find_test_color,
                 );
+                let diag_highlight = make_error_highlight_layer(
+                    self.editor_highlight_line,
+                    self.diag_highlight_color,
+                );
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
                     .height(Length::Shrink)
@@ -2502,7 +2515,7 @@ impl App {
                     // so that highlight bands are always pixel-perfectly aligned,
                     // regardless of font size or theme.
                     .line_height(Pixels(LINE_HEIGHT));
-                let editor_stack: Element<'_, Msg> = stack![te, highlight].into();
+                let editor_stack: Element<'_, Msg> = stack![te, diag_highlight, highlight].into();
                 mouse_area(
                     scrollable(row![gutter, editor_stack])
                         .id(scrollable::Id::new("editor_scroll"))
@@ -3025,6 +3038,34 @@ fn make_highlight_layer<'a>(line_index: Option<usize>) -> Element<'a, Msg> {
                     background: Some(iced::Background::Color(Color::from_rgba(
                         1.0, 0.88, 0.0, 0.22,
                     ))),
+                    border: iced::Border::default(),
+                    text_color: None,
+                    shadow: iced::Shadow::default(),
+                })
+                .width(Length::Fill),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    } else {
+        Space::new(Length::Fill, Length::Fill).into()
+    }
+}
+
+/// Build a virtual highlight-overlay element that colors one diagnostic line.
+///
+/// Works like [`make_highlight_layer`] but accepts a custom `color` so that
+/// errors, warnings, and notes each get their own distinct tint.  The alpha
+/// component of `color` is overridden to `0.25` to keep the text readable.
+fn make_error_highlight_layer<'a>(line_index: Option<usize>, color: Color) -> Element<'a, Msg> {
+    if let Some(line) = line_index {
+        let offset = EDITOR_PADDING_TOP + line as f32 * LINE_HEIGHT;
+        let hl_color = Color { a: 0.25, ..color };
+        column![
+            Space::with_height(Length::Fixed(offset)),
+            container(Space::new(Length::Fill, Length::Fixed(LINE_HEIGHT)))
+                .style(move |_theme| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(hl_color)),
                     border: iced::Border::default(),
                     text_color: None,
                     shadow: iced::Shadow::default(),
