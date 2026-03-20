@@ -199,10 +199,11 @@ struct EditorTab {
     content: text_editor::Content,
     /// `true` after any edit action since the last save.
     dirty: bool,
-    /// Persistent diagnostic error/warning/note lines for this tab.
-    /// Each entry is `(0-based line index, highlight color)`.  Lines remain
-    /// highlighted until the tab is closed or deleted.
-    error_lines: Vec<(usize, Color)>,
+    /// Persistent diagnostic error/warning/note information for this tab.
+    /// Each entry contains the full error info including message and error code
+    /// so that inline gutter tooltips can be shown.  Lines remain highlighted
+    /// until the tab is closed or deleted.
+    editor_errors: Vec<EditorError>,
 }
 
 impl EditorTab {
@@ -212,7 +213,7 @@ impl EditorTab {
             path: None,
             content: text_editor::Content::new(),
             dirty: false,
-            error_lines: Vec::new(),
+            editor_errors: Vec::new(),
         }
     }
 
@@ -226,7 +227,7 @@ impl EditorTab {
             path: Some(path),
             content: text_editor::Content::with_text(file_text),
             dirty: false,
-            error_lines: Vec::new(),
+            editor_errors: Vec::new(),
         }
     }
 
@@ -265,6 +266,40 @@ struct Diagnostic {
     column: usize,
     /// The human-readable message from the diagnostic header line.
     message: String,
+    /// Optional Rust error code, e.g. `"E0425"`.
+    error_code: Option<String>,
+}
+
+/// Full diagnostic information stored on an editor tab line for inline
+/// tooltips and the error dropdown.
+#[derive(Debug, Clone)]
+struct EditorError {
+    /// 0-based line index.
+    line: usize,
+    /// 1-based column number.
+    column: usize,
+    level: DiagnosticLevel,
+    /// Full error message.
+    message: String,
+    /// Optional Rust error code (e.g. `"E0425"`).
+    error_code: Option<String>,
+}
+
+/// A reference to a single diagnostic used as an item type for the editor
+/// error [`pick_list`] dropdown.  Implements [`Display`] so the formatted
+/// label is shown in the widget.
+#[derive(Debug, Clone, PartialEq)]
+struct DiagRef {
+    /// Index into `App::diagnostics`.
+    idx: usize,
+    /// Pre-formatted display label shown in the dropdown.
+    label: String,
+}
+
+impl std::fmt::Display for DiagRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,9 +416,10 @@ struct App {
     // --- Diagnostics ---
     /// Parsed diagnostics accumulated during the last cargo run.
     diagnostics: Vec<Diagnostic>,
-    /// The most recent diagnostic header line (level + message) waiting to be
-    /// paired with the following ` --> file:line:col` location line.
-    pending_diag_level: Option<(DiagnosticLevel, String)>,
+    /// The most recent diagnostic header line (level + message + optional
+    /// error code) waiting to be paired with the following
+    /// ` --> file:line:col` location line.
+    pending_diag_level: Option<(DiagnosticLevel, String, Option<String>)>,
     /// Highlight colour to use for the diagnostic line in the editor.
     diag_highlight_color: Color,
 }
@@ -595,6 +631,8 @@ enum Msg {
     OpenDiagnostic { path: PathBuf, line: usize, col: usize, level: DiagnosticLevel },
     /// Async result of reading the file for an `OpenDiagnostic` action.
     DiagnosticFileLoaded(Option<(PathBuf, String, usize, usize, DiagnosticLevel)>),
+    /// User selected a diagnostic from the editor error dropdown; navigate to it.
+    SelectErrorFromDropdown(usize),
 }
 
 // ---------------------------------------------------------------------------
@@ -716,10 +754,10 @@ impl App {
                     return Task::none();
                 }
                 // Parse cargo diagnostics on the fly.
-                if let Some((level, msg)) = parse_diagnostic_line(&line) {
-                    self.pending_diag_level = Some((level, msg));
+                if let Some((level, msg, error_code)) = parse_diagnostic_line(&line) {
+                    self.pending_diag_level = Some((level, msg, error_code));
                 } else if let Some((file, diag_line, col)) = parse_location_line(&line) {
-                    if let Some((level, msg)) = self.pending_diag_level.take() {
+                    if let Some((level, msg, error_code)) = self.pending_diag_level.take() {
                         let full_path = if file.is_absolute() {
                             file
                         } else {
@@ -731,6 +769,7 @@ impl App {
                             line: diag_line,
                             column: col,
                             message: msg,
+                            error_code,
                         });
                     }
                 }
@@ -1512,6 +1551,13 @@ impl App {
 
             Msg::DiagnosticFileLoaded(maybe) => {
                 if let Some((path, file_text, line, col, level)) = maybe {
+                    // Find the matching diagnostic before path may be moved.
+                    let matching_diag = self
+                        .diagnostics
+                        .iter()
+                        .find(|d| d.file == path && d.line == line)
+                        .cloned();
+
                     // Switch to an existing tab or open a new one.
                     if let Some(idx) = self
                         .editor_tabs
@@ -1544,19 +1590,25 @@ impl App {
                             ));
                         }
                     }
-                    let diag_color = match level {
-                        DiagnosticLevel::Error   => DIAG_ERROR_COLOR,
-                        DiagnosticLevel::Warning => DIAG_WARN_COLOR,
-                        DiagnosticLevel::Note    => DIAG_NOTE_COLOR,
-                    };
+                    let diag_color = level_color(level);
                     self.diag_highlight_color = diag_color;
-                    // Store the error line persistently on the tab so the
-                    // highlight survives scrolling and tab switches.
+                    // Store the full error info persistently on the tab so the
+                    // highlight and gutter tooltip survive scrolling and tab switches.
                     if let Some(tab) = self.editor_tabs.get_mut(self.active_tab) {
-                        // Avoid duplicates: only add if this line is not already
-                        // present (one highlight band per line is sufficient).
-                        if !tab.error_lines.iter().any(|&(l, _)| l == target_line) {
-                            tab.error_lines.push((target_line, diag_color));
+                        // Avoid duplicates: one entry per line is sufficient.
+                        if !tab.editor_errors.iter().any(|e| e.line == target_line) {
+                            let message = matching_diag
+                                .as_ref()
+                                .map(|d| d.message.clone())
+                                .unwrap_or_default();
+                            let error_code = matching_diag.and_then(|d| d.error_code);
+                            tab.editor_errors.push(EditorError {
+                                line: target_line,
+                                column: target_col,
+                                level,
+                                message,
+                                error_code,
+                            });
                         }
                     }
                     self.editor_highlight_line = Some(target_line);
@@ -1565,6 +1617,18 @@ impl App {
                     return scroll_editor_to_line(target_line);
                 }
                 Task::none()
+            }
+
+            // --- Error dropdown ---
+            Msg::SelectErrorFromDropdown(idx) => {
+                let Some(diag) = self.diagnostics.get(idx).cloned() else {
+                    return Task::none();
+                };
+                let path = diag.file.clone();
+                let line = diag.line;
+                let col = diag.column;
+                let level = diag.level;
+                self.update(Msg::OpenDiagnostic { path, line, col, level })
             }
         }
     }
@@ -2141,32 +2205,23 @@ impl App {
                             "[{}] {}:{}:{} — {}",
                             level_str, file_name, diag.line, diag.column, diag.message
                         );
-                        let tooltip = format!(
-                            "{}\nDatei: {}\nZeile {}, Spalte {}",
-                            diag.message,
-                            diag.file.display(),
-                            diag.line,
-                            diag.column
-                        );
                         let path = diag.file.clone();
                         let line = diag.line;
                         let col  = diag.column;
                         let level = diag.level;
-                        hover_tip(
-                            button(text(label).size(12))
-                                .on_press(Msg::OpenDiagnostic { path, line, col, level })
-                                .padding([3, 8])
-                                .width(Length::Fill)
-                                .style(move |_theme: &iced::Theme, _status: button::Status| {
-                                    button::Style {
-                                        background: Some(iced::Background::Color(color)),
-                                        text_color: Color::WHITE,
-                                        border: iced::border::rounded(2),
-                                        ..Default::default()
-                                    }
-                                }),
-                            tooltip,
-                        )
+                        button(text(label).size(12))
+                            .on_press(Msg::OpenDiagnostic { path, line, col, level })
+                            .padding([3, 8])
+                            .width(Length::Fill)
+                            .style(move |_theme: &iced::Theme, _status: button::Status| {
+                                button::Style {
+                                    background: Some(iced::Background::Color(color)),
+                                    text_color: Color::WHITE,
+                                    border: iced::border::rounded(2),
+                                    ..Default::default()
+                                }
+                            })
+                            .into()
                     })
                     .collect();
 
@@ -2515,7 +2570,7 @@ impl App {
         let editor_widget: Element<'_, Msg> =
             if let Some(tab) = self.editor_tabs.get(self.active_tab) {
                 let line_count = tab.content.text().split('\n').count().max(1);
-                let gutter = make_gutter(line_count, &tab.error_lines);
+                let gutter = make_gutter(line_count, &tab.editor_errors);
                 let highlight = make_multi_highlight_layer(
                     &self.find_all_match_lines,
                     self.find_current_match,
@@ -2523,7 +2578,7 @@ impl App {
                 );
                 // Persistent per-tab diagnostic highlights (all error/warning/note
                 // lines remain visible until the tab is closed).
-                let diag_highlight = make_persistent_error_highlight_layer(&tab.error_lines);
+                let diag_highlight = make_persistent_error_highlight_layer(&tab.editor_errors);
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
                     .height(Length::Shrink)
@@ -2558,6 +2613,48 @@ impl App {
         .spacing(4)
         .align_y(iced::Alignment::Center);
 
+        // -- Error / warning dropdown (only visible when diagnostics exist) --
+        // Sorted by file path + line + column for easy navigation.
+        let error_dropdown: Element<'_, Msg> = if !self.diagnostics.is_empty() {
+            let mut sorted: Vec<(usize, &Diagnostic)> =
+                self.diagnostics.iter().enumerate().collect();
+            sorted.sort_by_key(|(_, d)| {
+                (d.file.to_string_lossy().to_string(), d.line, d.column)
+            });
+
+            let items: Vec<DiagRef> = sorted
+                .iter()
+                .map(|(i, d)| {
+                    let level_str = match d.level {
+                        DiagnosticLevel::Error   => "FEHLER",
+                        DiagnosticLevel::Warning => "WARNUNG",
+                        DiagnosticLevel::Note    => "HINWEIS",
+                    };
+                    let file_name = d
+                        .file
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| d.file.to_string_lossy().into_owned());
+                    let label = format!(
+                        "[{}] {}:{}:{} — {}",
+                        level_str, file_name, d.line, d.column, d.message
+                    );
+                    DiagRef { idx: *i, label }
+                })
+                .collect();
+
+            pick_list(
+                items,
+                None::<DiagRef>,
+                |item: DiagRef| Msg::SelectErrorFromDropdown(item.idx),
+            )
+            .placeholder("▼ Diagnosen — Eintrag wählen um zur Zeile zu springen…")
+            .width(Length::Fill)
+            .into()
+        } else {
+            Space::with_height(0).into()
+        };
+
         let mut col = column![
             row![
                 back_btn,
@@ -2574,6 +2671,7 @@ impl App {
             scrollable(tab_bar).direction(scrollable::Direction::Horizontal(
                 scrollable::Scrollbar::default(),
             )),
+            error_dropdown,
         ]
         .spacing(8)
         .padding(16)
@@ -2775,6 +2873,74 @@ fn hover_tip<'a>(widget: impl Into<Element<'a, Msg>>, tip: String) -> Element<'a
         .on_enter(Msg::TooltipShow(tip))
         .on_exit(Msg::TooltipHide)
         .into()
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic colour / tooltip helpers
+// ---------------------------------------------------------------------------
+
+/// Return the highlight colour for a given diagnostic level.
+fn level_color(level: DiagnosticLevel) -> Color {
+    match level {
+        DiagnosticLevel::Error   => DIAG_ERROR_COLOR,
+        DiagnosticLevel::Warning => DIAG_WARN_COLOR,
+        DiagnosticLevel::Note    => DIAG_NOTE_COLOR,
+    }
+}
+
+/// Build the tooltip string shown when the user hovers over an error-marked
+/// line number in the editor gutter.  Includes the severity label, the full
+/// message, and — if a known error code is present — a German suggestion.
+fn build_error_tooltip(e: &EditorError) -> String {
+    let level_str = match e.level {
+        DiagnosticLevel::Error   => "FEHLER",
+        DiagnosticLevel::Warning => "WARNUNG",
+        DiagnosticLevel::Note    => "HINWEIS",
+    };
+    let code_part = e
+        .error_code
+        .as_deref()
+        .map(|c| format!(" [{}]", c))
+        .unwrap_or_default();
+    let base = format!(
+        "{}{}\nZeile {}, Spalte {} — {}",
+        level_str,
+        code_part,
+        // EditorError.line is 0-based; add 1 for human-readable display.
+        // EditorError.column is already 1-based (as reported by cargo).
+        e.line + 1,
+        e.column,
+        e.message
+    );
+    if let Some(code) = e.error_code.as_deref() {
+        if let Some(suggestion) = error_suggestions(code) {
+            return format!("{}\n💡 Lösung: {}", base, suggestion);
+        }
+    }
+    base
+}
+
+/// Return a German solution hint for well-known Rust error codes.
+/// Returns `None` when the code is not in the built-in table.
+fn error_suggestions(code: &str) -> Option<&'static str> {
+    match code {
+        "E0425" => Some("Prüfen Sie den Namen der Variablen/Funktion — ist sie im aktuellen Gültigkeitsbereich sichtbar?"),
+        "E0308" => Some("Die Typen stimmen nicht überein. Prüfen Sie, ob eine explizite Typumwandlung (as / From / Into) nötig ist."),
+        "E0382" => Some("Der Wert wurde bereits verschoben (moved). Verwenden Sie .clone() oder übergeben Sie eine Referenz (&)."),
+        "E0106" => Some("Fehlende Lebenszeit-Annotation. Fügen Sie einen Lifetime-Parameter (z.B. <'a>) hinzu."),
+        "E0502" => Some("Gleichzeitiger mutierbarer und immutabler Ausleihe ist nicht erlaubt. Teilen Sie die Ausleihbereiche auf."),
+        "E0597" => Some("Die ausgeliehene Variable lebt nicht lang genug. Verlängern Sie den Gültigkeitsbereich oder verwenden Sie .to_owned()."),
+        "E0277" => Some("Der Trait ist nicht für diesen Typ implementiert. Fügen Sie eine 'impl Trait for Typ'-Implementierung hinzu oder verwenden Sie einen anderen Typ."),
+        "E0507" => Some("Inhaber eines dereferenzierten Werts kann nicht verschoben werden. Verwenden Sie .clone()."),
+        "E0499" => Some("Ein Wert kann nicht mehrfach mutierbar ausgeliehen werden. Beenden Sie den ersten mut-Ausleihe-Bereich vor dem zweiten."),
+        "E0505" => Some("Wert kann nicht verschoben werden, da er noch ausgeliehen ist. Beenden Sie den Ausleihe-Bereich zuerst."),
+        "E0515" => Some("Rückgabe einer Referenz auf einen lokalen Wert ist nicht erlaubt. Geben Sie einen owned Wert zurück."),
+        "E0369" => Some("Der Operator ist für diesen Typ nicht implementiert. Implementieren Sie den passenden Operator-Trait (z.B. std::ops::Add)."),
+        "E0004" => Some("Nicht-erschöpfendes Pattern-Matching. Fügen Sie die fehlenden Zweige oder einen Catch-all-Arm (_) hinzu."),
+        "E0282" => Some("Typ kann nicht automatisch ermittelt werden. Geben Sie den Typ explizit an (z.B. let x: u32 = ...)."),
+        "E0061" => Some("Falsche Anzahl an Argumenten. Prüfen Sie die Funktionssignatur."),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2985,13 +3151,12 @@ fn alarm_button_style(
 /// every number aligned with the corresponding text line inside the adjacent
 /// `text_editor`.
 ///
-/// Lines listed in `error_lines` (as 0-based indices) are rendered with the
-/// associated diagnostic color so that error/warning/note positions are
-/// immediately visible in the gutter.
-fn make_gutter<'a>(line_count: usize, error_lines: &[(usize, Color)]) -> Element<'a, Msg> {
-    // Build a fast lookup: 0-based line index → diagnostic color.
-    let error_map: std::collections::HashMap<usize, Color> =
-        error_lines.iter().copied().collect();
+/// Lines listed in `editor_errors` are rendered with the associated diagnostic
+/// colour and wrapped with a tooltip showing the error message and suggestions.
+fn make_gutter<'a>(line_count: usize, editor_errors: &[EditorError]) -> Element<'a, Msg> {
+    // Build a fast lookup: 0-based line index → &EditorError.
+    let error_map: std::collections::HashMap<usize, &EditorError> =
+        editor_errors.iter().map(|e| (e.line, e)).collect();
 
     let mut items: Vec<Element<'a, Msg>> = Vec::with_capacity(line_count + 1);
     // Top spacer matching text_editor's internal top padding so that line 1
@@ -2999,19 +3164,21 @@ fn make_gutter<'a>(line_count: usize, error_lines: &[(usize, Color)]) -> Element
     items.push(Space::with_height(Length::Fixed(EDITOR_PADDING_TOP)).into());
     for n in 1..=line_count {
         let line_0based = n - 1;
-        let num_text = if let Some(&color) = error_map.get(&line_0based) {
-            // Saturate the diagnostic color (override alpha to 1.0) so the
-            // gutter number is fully opaque and clearly visible.
-            let gutter_color = Color { a: 1.0, ..color };
-            text(n.to_string()).size(12).color(gutter_color)
+        let item: Element<'a, Msg> = if let Some(e) = error_map.get(&line_0based) {
+            let base_color = level_color(e.level);
+            let gutter_color = Color { a: 1.0, ..base_color };
+            let num_text = text(n.to_string()).size(12).color(gutter_color);
+            let tip = build_error_tooltip(e);
+            hover_tip(
+                container(num_text).center_y(Length::Fixed(LINE_HEIGHT)),
+                tip,
+            )
         } else {
-            text(n.to_string()).size(12)
-        };
-        items.push(
-            container(num_text)
+            container(text(n.to_string()).size(12))
                 .center_y(Length::Fixed(LINE_HEIGHT))
-                .into(),
-        );
+                .into()
+        };
+        items.push(item);
     }
     container(column(items))
         .style(|_theme| iced::widget::container::Style {
@@ -3089,28 +3256,29 @@ fn make_highlight_layer<'a>(line_index: Option<usize>) -> Element<'a, Msg> {
 /// diagnostic lines for the active editor tab.
 ///
 /// Similar to [`make_multi_highlight_layer`] but uses the per-tab
-/// `error_lines` (stored as `Vec<(usize, Color)>`) instead of find-match
+/// `editor_errors` (stored as `Vec<EditorError>`) instead of find-match
 /// state.  Each line is independently positioned so that all bands remain
 /// correctly aligned during scrolling.
 ///
-/// When `error_lines` is empty the overlay is fully transparent.
-fn make_persistent_error_highlight_layer<'a>(error_lines: &[(usize, Color)]) -> Element<'a, Msg> {
-    if error_lines.is_empty() {
+/// When `editor_errors` is empty the overlay is fully transparent.
+fn make_persistent_error_highlight_layer<'a>(editor_errors: &[EditorError]) -> Element<'a, Msg> {
+    if editor_errors.is_empty() {
         return Space::new(Length::Fill, Length::Fill).into();
     }
 
-    let mut layers: Vec<Element<'a, Msg>> = Vec::with_capacity(error_lines.len() + 1);
+    let mut layers: Vec<Element<'a, Msg>> = Vec::with_capacity(editor_errors.len() + 1);
     // Base transparent fill so the stack occupies the full editor area.
     layers.push(Space::new(Length::Fill, Length::Fill).into());
 
-    for &(line, color) in error_lines {
-        let hl_color = Color { a: 0.25, ..color };
-        let offset = EDITOR_PADDING_TOP + line as f32 * LINE_HEIGHT;
+    for e in editor_errors {
+        let base_color = level_color(e.level);
+        let color = Color { a: 0.25, ..base_color };
+        let offset = EDITOR_PADDING_TOP + e.line as f32 * LINE_HEIGHT;
         let band: Element<'a, Msg> = column![
             Space::with_height(Length::Fixed(offset)),
             container(Space::new(Length::Fill, Length::Fixed(LINE_HEIGHT)))
                 .style(move |_theme| iced::widget::container::Style {
-                    background: Some(iced::Background::Color(hl_color)),
+                    background: Some(iced::Background::Color(color)),
                     border: iced::Border::default(),
                     text_color: None,
                     shadow: iced::Shadow::default(),
@@ -3228,10 +3396,10 @@ fn output_find_status_text(current: usize, total: usize, hl_line: Option<usize>)
 }
 
 /// Parse a cargo diagnostic header line (e.g. `error[E0425]: message` or
-/// `warning: message`) and return the [`DiagnosticLevel`] together with the
-/// human-readable message.  Returns `None` for lines that are not diagnostic
-/// headers.
-fn parse_diagnostic_line(line: &str) -> Option<(DiagnosticLevel, String)> {
+/// `warning: message`) and return the [`DiagnosticLevel`], the human-readable
+/// message, and the optional error code (e.g. `"E0425"`).
+/// Returns `None` for lines that are not diagnostic headers.
+fn parse_diagnostic_line(line: &str) -> Option<(DiagnosticLevel, String, Option<String>)> {
     let (level, rest) = if let Some(r) = line.strip_prefix("error") {
         (DiagnosticLevel::Error, r)
     } else if let Some(r) = line.strip_prefix("warning") {
@@ -3243,11 +3411,21 @@ fn parse_diagnostic_line(line: &str) -> Option<(DiagnosticLevel, String)> {
     };
 
     // Accept `error[E0xxx]: msg`, `error: msg`, but NOT `error` alone (no colon).
-    let msg = if let Some(r) = rest.strip_prefix('[') {
-        // `[E0xxx]: msg` → skip to after `]: `
-        r.splitn(2, "]: ").nth(1)?.to_string()
+    let (msg, error_code) = if let Some(r) = rest.strip_prefix('[') {
+        // `[E0xxx]: msg` → extract the code and the message.
+        // splitn(2, "]: ") produces at most two parts. The second part (index 1)
+        // is `None` when `]: ` does not appear, which means the bracket notation
+        // is malformed — return None via `?` so we skip this line entirely.
+        let mut parts = r.splitn(2, "]: ");
+        let raw_code = parts.next().map(|s| s.to_string());
+        let msg = parts.next()?.to_string();
+        // Only keep the code when it actually looks like a valid code identifier
+        // (non-empty and does not itself contain `]: ` fragments that slipped
+        // through edge-case inputs).
+        let code = raw_code.filter(|c| !c.is_empty());
+        (msg, code)
     } else if let Some(r) = rest.strip_prefix(": ") {
-        r.to_string()
+        (r.to_string(), None)
     } else {
         return None;
     };
@@ -3258,7 +3436,7 @@ fn parse_diagnostic_line(line: &str) -> Option<(DiagnosticLevel, String)> {
         return None;
     }
 
-    Some((level, msg))
+    Some((level, msg, error_code))
 }
 
 /// Parse a cargo location line of the form `  --> relative/path.rs:line:col`
