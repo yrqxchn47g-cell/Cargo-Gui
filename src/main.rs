@@ -622,6 +622,9 @@ enum Msg {
     /// Open the help PDF with the system default viewer.
     OpenHelpPdf,
 
+    /// Open the Public Domain license information in the default browser.
+    OpenPublicDomainLink,
+
     // --- Find highlight color ---
     /// Change the highlight color of the current find match in the editor.
     SetFindTestColor(Color),
@@ -1522,6 +1525,24 @@ impl App {
 
                 if let Err(e) = open_result {
                     self.status = format!("PDF konnte nicht geöffnet werden: {e}");
+                }
+                Task::none()
+            }
+
+            Msg::OpenPublicDomainLink => {
+                let url = "https://creativecommons.org/publicdomain/";
+                let open_result = {
+                    #[cfg(target_os = "linux")]
+                    { std::process::Command::new("xdg-open").arg(url).spawn() }
+                    #[cfg(target_os = "macos")]
+                    { std::process::Command::new("open").arg(url).spawn() }
+                    #[cfg(target_os = "windows")]
+                    { std::process::Command::new("explorer").arg(url).spawn() }
+                    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+                    { Err(std::io::Error::other("nicht unterstützte Plattform")) }
+                };
+                if let Err(e) = open_result {
+                    self.status = format!("Link konnte nicht geöffnet werden: {e}");
                 }
                 Task::none()
             }
@@ -2756,7 +2777,13 @@ impl App {
         let email_label = text("E-Mail:").size(13);
         let email_value = text("juergen.sr@t-online.de").size(14);
         let license_label = text("Lizenz:").size(13);
-        let license_value = text("Public Domain").size(14);
+        let license_value = hover_tip(
+            button(text("Public Domain").size(14))
+                .on_press(Msg::OpenPublicDomainLink)
+                .padding([0, 4])
+                .style(iced::widget::button::text),
+            "Public-Domain-Informationen im Browser öffnen".to_string(),
+        );
 
         let info_col = column![
             title,
