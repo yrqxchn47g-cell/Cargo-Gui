@@ -307,7 +307,7 @@ impl std::fmt::Display for DiagRef {
 // ---------------------------------------------------------------------------
 
 fn main() -> iced::Result {
-    iced::application("Cargo GUI", App::update, App::view)
+    iced::application("🦀 Jürgen's Cargo GUI", App::update, App::view)
         .subscription(App::subscription)
         .theme(|app: &App| app.config.theme.to_iced())
         .font(icons::BOOTSTRAP_FONT_BYTES)
