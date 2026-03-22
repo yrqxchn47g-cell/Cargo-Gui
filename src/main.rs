@@ -1910,15 +1910,10 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn view_topbar(&self) -> Element<'_, Msg> {
-        let menu_btn = hover_tip(
-            button(bi(Bootstrap::List).size(self.config.button_font_size)).padding([4, 10]),
-            "Hauptmenü — Schnellzugriff auf Ansichten und Funktionen".to_string(),
-        );
-
         let title = text("Cargo GUI").size(20);
 
         container(
-            row![menu_btn, title]
+            row![title]
                 .spacing(10)
                 .align_y(iced::Alignment::Center)
                 .padding([6, 10]),
