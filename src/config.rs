@@ -159,6 +159,16 @@ fn default_button_font_size() -> f32 {
     13.0
 }
 
+/// Default window width used when no value is stored in the config file.
+fn default_window_width() -> f32 {
+    1280.0
+}
+
+/// Default window height used when no value is stored in the config file.
+fn default_window_height() -> f32 {
+    800.0
+}
+
 /// Persistent application settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -171,6 +181,16 @@ pub struct Config {
     /// Range: 10 – 24.  Defaults to 13.0 when not set in the config file.
     #[serde(default = "default_button_font_size")]
     pub button_font_size: f32,
+    /// Window width in logical pixels, persisted across restarts.
+    ///
+    /// Minimum enforced value: 800.
+    #[serde(default = "default_window_width")]
+    pub window_width: f32,
+    /// Window height in logical pixels, persisted across restarts.
+    ///
+    /// Minimum enforced value: 600.
+    #[serde(default = "default_window_height")]
+    pub window_height: f32,
 }
 
 impl Default for Config {
@@ -179,6 +199,8 @@ impl Default for Config {
             default_path: String::new(),
             theme: AppTheme::default(),
             button_font_size: default_button_font_size(),
+            window_width: default_window_width(),
+            window_height: default_window_height(),
         }
     }
 }

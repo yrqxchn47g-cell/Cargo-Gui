@@ -115,6 +115,12 @@ const DIAG_WARN_COLOR: Color = Color { r: 0.70, g: 0.50, b: 0.05, a: 0.90 };
 /// Background colour for note/other diagnostic links (blue).
 const DIAG_NOTE_COLOR: Color = Color { r: 0.15, g: 0.40, b: 0.78, a: 0.90 };
 
+/// Minimum window width enforced when restoring or saving the window size.
+const MIN_WINDOW_WIDTH: f32 = 800.0;
+
+/// Minimum window height enforced when restoring or saving the window size.
+const MIN_WINDOW_HEIGHT: f32 = 600.0;
+
 /// Ghost image shown in the About dialog.
 const GHOST_GIF: &[u8] = include_bytes!("../assets/Ghost.gif");
 
@@ -307,10 +313,16 @@ impl std::fmt::Display for DiagRef {
 // ---------------------------------------------------------------------------
 
 fn main() -> iced::Result {
+    let config = Config::load();
+    let initial_size = iced::Size::new(
+        config.window_width.max(MIN_WINDOW_WIDTH),
+        config.window_height.max(MIN_WINDOW_HEIGHT),
+    );
     iced::application("🦀 Jürgen's Cargo GUI", App::update, App::view)
         .subscription(App::subscription)
         .theme(|app: &App| app.config.theme.to_iced())
         .font(icons::BOOTSTRAP_FONT_BYTES)
+        .window_size(initial_size)
         .run_with(App::new)
 }
 
@@ -410,6 +422,8 @@ struct App {
     mouse_x: f32,
     /// Current mouse cursor Y position (in logical pixels).
     mouse_y: f32,
+    /// Current window width in logical pixels (updated via WindowResized).
+    window_width: f32,
     /// Current window height in logical pixels (updated via WindowResized).
     window_height: f32,
 
@@ -428,6 +442,8 @@ impl App {
     fn new() -> (Self, Task<Msg>) {
         let config = Config::load();
         let project_path = config.default_path.clone();
+        let window_width = config.window_width.max(MIN_WINDOW_WIDTH);
+        let window_height = config.window_height.max(MIN_WINDOW_HEIGHT);
         let editor_tabs = vec![EditorTab::new_untitled(0)];
         (
             Self {
@@ -469,7 +485,8 @@ impl App {
                 tooltip_text: None,
                 mouse_x: 0.0,
                 mouse_y: 0.0,
-                window_height: 600.0,
+                window_width,
+                window_height,
                 diagnostics: Vec::new(),
                 pending_diag_level: None,
                 diag_highlight_color: DIAG_ERROR_COLOR,
@@ -524,6 +541,8 @@ enum Msg {
     },
     /// Clear the output terminal and reset state.
     Clear,
+    /// Copy the entire output content to the clipboard.
+    CopyOutput,
     /// Periodic flush: rebuild `text_editor::Content` from the ring buffer if dirty.
     FlushOutput,
     /// Pass-through for the output text-editor.
@@ -820,6 +839,15 @@ impl App {
                 self.diagnostics.clear();
                 self.pending_diag_level = None;
                 Task::none()
+            }
+
+            Msg::CopyOutput => {
+                let text = self.output_content.text();
+                if text.is_empty() {
+                    Task::none()
+                } else {
+                    clipboard::write(text)
+                }
             }
 
             Msg::FlushOutput => {
@@ -1491,12 +1519,18 @@ impl App {
             }
 
             Msg::WindowResized(size) => {
-                self.window_height = size.height;
+                self.window_width = size.width.max(MIN_WINDOW_WIDTH);
+                self.window_height = size.height.max(MIN_WINDOW_HEIGHT);
+                self.config.window_width = self.window_width;
+                self.config.window_height = self.window_height;
                 Task::none()
             }
 
             // --- App ---
-            Msg::Quit => iced::exit(),
+            Msg::Quit => {
+                self.config.save();
+                iced::exit()
+            }
 
             Msg::OpenHelpPdf => {
                 // Find PDF next to the executable or in the current directory.
@@ -2116,6 +2150,20 @@ impl App {
             "Ausgabe leeren und Status zurücksetzen".to_string(),
         );
 
+        let copy_output_btn = hover_tip(
+            button(
+                row![
+                    bi(Bootstrap::ClipboardFill).size(fs),
+                    text(" Kopieren").size(fs),
+                ]
+                .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::CopyOutput)
+            .padding([5, 10])
+            .style(readable_button_style),
+            "Gesamte Ausgabe in die Zwischenablage kopieren".to_string(),
+        );
+
         let timing_str = if self.display_elapsed_ms > 0 {
             format!(
                 "Ausführungszeit: {}",
@@ -2128,6 +2176,7 @@ impl App {
         let output_header = row![
             text("Ausgabe").size(15),
             clear_btn,
+            copy_output_btn,
             horizontal_space(),
             text(timing_str).size(12),
         ]
@@ -2880,6 +2929,9 @@ impl App {
             }
             iced::Event::Window(iced::window::Event::Resized(size)) => {
                 Some(Msg::WindowResized(size))
+            }
+            iced::Event::Window(iced::window::Event::CloseRequested) => {
+                Some(Msg::Quit)
             }
             _ => None,
         });
