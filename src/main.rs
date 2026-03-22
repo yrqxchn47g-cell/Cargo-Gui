@@ -445,6 +445,17 @@ impl App {
         let window_width = config.window_width.max(MIN_WINDOW_WIDTH);
         let window_height = config.window_height.max(MIN_WINDOW_HEIGHT);
         let editor_tabs = vec![EditorTab::new_untitled(0)];
+        let startup_task: Task<Msg> = if config.is_fullscreen {
+            iced::window::get_latest().then(|maybe_id| {
+                if let Some(id) = maybe_id {
+                    iced::window::change_mode(id, iced::window::Mode::Fullscreen)
+                } else {
+                    Task::none()
+                }
+            })
+        } else {
+            Task::none()
+        };
         (
             Self {
                 current_view: View::Main,
@@ -491,7 +502,7 @@ impl App {
                 pending_diag_level: None,
                 diag_highlight_color: DIAG_ERROR_COLOR,
             },
-            Task::none(),
+            startup_task,
         )
     }
 }
@@ -634,6 +645,8 @@ enum Msg {
     TooltipHide,
     /// Window was resized; track height for tooltip positioning.
     WindowResized(iced::Size),
+    /// Window mode changed (e.g. entered or exited fullscreen).
+    WindowModeChanged(iced::window::Mode),
 
     // --- App ---
     Quit,
@@ -1523,6 +1536,19 @@ impl App {
                 self.window_height = size.height.max(MIN_WINDOW_HEIGHT);
                 self.config.window_width = self.window_width;
                 self.config.window_height = self.window_height;
+                iced::window::get_latest()
+                    .then(|maybe_id| {
+                        if let Some(id) = maybe_id {
+                            iced::window::get_mode(id)
+                        } else {
+                            Task::done(iced::window::Mode::Windowed)
+                        }
+                    })
+                    .map(Msg::WindowModeChanged)
+            }
+
+            Msg::WindowModeChanged(mode) => {
+                self.config.is_fullscreen = mode == iced::window::Mode::Fullscreen;
                 Task::none()
             }
 

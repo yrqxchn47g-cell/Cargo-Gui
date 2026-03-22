@@ -169,6 +169,11 @@ fn default_window_height() -> f32 {
     800.0
 }
 
+/// Default fullscreen state used when no value is stored in the config file.
+fn default_is_fullscreen() -> bool {
+    false
+}
+
 /// Persistent application settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -191,6 +196,9 @@ pub struct Config {
     /// Minimum enforced value: 600.
     #[serde(default = "default_window_height")]
     pub window_height: f32,
+    /// Whether the window was in fullscreen mode when the application was last closed.
+    #[serde(default = "default_is_fullscreen")]
+    pub is_fullscreen: bool,
 }
 
 impl Default for Config {
@@ -201,6 +209,7 @@ impl Default for Config {
             button_font_size: default_button_font_size(),
             window_width: default_window_width(),
             window_height: default_window_height(),
+            is_fullscreen: default_is_fullscreen(),
         }
     }
 }
