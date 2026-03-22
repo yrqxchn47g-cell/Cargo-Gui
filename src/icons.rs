@@ -25,5 +25,7 @@ pub use iced_fonts::{Bootstrap, BOOTSTRAP_FONT, BOOTSTRAP_FONT_BYTES};
 /// ```
 pub fn bi(icon: Bootstrap) -> iced::widget::Text<'static> {
     use iced_fonts::bootstrap::icon_to_char;
-    iced::widget::text(icon_to_char(icon).to_string()).font(BOOTSTRAP_FONT)
+    iced::widget::text(icon_to_char(icon).to_string())
+        .font(BOOTSTRAP_FONT)
+        .line_height(1.0)
 }
