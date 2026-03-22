@@ -3850,30 +3850,34 @@ mod tests {
 
     #[test]
     fn parse_diag_error_with_code() {
-        let (level, msg) = parse_diagnostic_line("error[E0425]: cannot find value `x`").unwrap();
+        let (level, msg, error_code) = parse_diagnostic_line("error[E0425]: cannot find value `x`").unwrap();
         assert!(matches!(level, DiagnosticLevel::Error));
         assert_eq!(msg, "cannot find value `x`");
+        assert_eq!(error_code, Some("E0425".to_string()));
     }
 
     #[test]
     fn parse_diag_error_no_code() {
-        let (level, msg) = parse_diagnostic_line("error: mismatched types").unwrap();
+        let (level, msg, error_code) = parse_diagnostic_line("error: mismatched types").unwrap();
         assert!(matches!(level, DiagnosticLevel::Error));
         assert_eq!(msg, "mismatched types");
+        assert_eq!(error_code, None);
     }
 
     #[test]
     fn parse_diag_warning() {
-        let (level, msg) = parse_diagnostic_line("warning: unused variable: `x`").unwrap();
+        let (level, msg, error_code) = parse_diagnostic_line("warning: unused variable: `x`").unwrap();
         assert!(matches!(level, DiagnosticLevel::Warning));
         assert_eq!(msg, "unused variable: `x`");
+        assert_eq!(error_code, None);
     }
 
     #[test]
     fn parse_diag_note() {
-        let (level, msg) = parse_diagnostic_line("note: see issue #12345").unwrap();
+        let (level, msg, error_code) = parse_diagnostic_line("note: see issue #12345").unwrap();
         assert!(matches!(level, DiagnosticLevel::Note));
         assert_eq!(msg, "see issue #12345");
+        assert_eq!(error_code, None);
     }
 
     #[test]
