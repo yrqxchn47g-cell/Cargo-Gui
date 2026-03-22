@@ -2366,10 +2366,14 @@ impl App {
     fn view_settings(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button(text("← Zurück").size(fs))
-                .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::ArrowLeft).size(fs), text(" Zurück").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
@@ -2408,14 +2412,14 @@ impl App {
 
         // -- Button font size row --
         let font_dec_btn = hover_tip(
-            button(text("−").size(16))
+            button(bi(Bootstrap::DashLg).size(14))
                 .on_press_maybe((fs > 10.0).then_some(Msg::ButtonFontSizeChanged(-1.0)))
                 .padding([4, 10])
                 .style(readable_button_style),
             "Schriftgröße der Buttons verkleinern".to_string(),
         );
         let font_inc_btn = hover_tip(
-            button(text("+").size(16))
+            button(bi(Bootstrap::PlusLg).size(14))
                 .on_press_maybe((fs < 24.0).then_some(Msg::ButtonFontSizeChanged(1.0)))
                 .padding([4, 10])
                 .style(readable_button_style),
@@ -2467,18 +2471,26 @@ impl App {
     fn view_editor(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button(text("← Zurück").size(fs))
-                .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::ArrowLeft).size(fs), text(" Zurück").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
         let new_tab_btn = hover_tip(
-            button(text("+ Neu").size(fs))
-                .on_press(Msg::TabNew)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::Plus).size(fs), text(" Neu").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::TabNew)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Neuen leeren Tab im Editor öffnen".to_string(),
         );
 
@@ -2510,8 +2522,12 @@ impl App {
             button(
                 row![
                     bi(Bootstrap::Search).size(fs),
-                    text(if self.find_replace_open { " Suchen ✕" } else { " Suchen" }).size(fs),
+                    text(" Suchen").size(fs),
                 ]
+                .push_maybe(
+                    self.find_replace_open
+                        .then(|| bi(Bootstrap::X).size(fs)),
+                )
                 .spacing(4)
                 .align_y(iced::Alignment::Center),
             )
@@ -2801,18 +2817,26 @@ impl App {
     fn view_help(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button(text("← Zurück").size(fs))
-                .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::ArrowLeft).size(fs), text(" Zurück").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
         let pdf_btn = hover_tip(
-            button(text("📄 PDF öffnen").size(fs))
-                .on_press(Msg::OpenHelpPdf)
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::FileEarmarkPdf).size(fs), text(" PDF öffnen").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::OpenHelpPdf)
+            .padding([5, 10])
+            .style(readable_button_style),
             "Bedienungsanleitung als PDF-Dokument öffnen".to_string(),
         );
 
@@ -2837,10 +2861,14 @@ impl App {
     fn view_about(&self) -> Element<'_, Msg> {
         let fs = self.config.button_font_size;
         let back_btn = hover_tip(
-            button(text("← Zurück").size(fs))
-                .on_press(Msg::NavigateTo(View::Main))
-                .padding([5, 10])
-                .style(readable_button_style),
+            button(
+                row![bi(Bootstrap::ArrowLeft).size(fs), text(" Zurück").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Main))
+            .padding([5, 10])
+            .style(readable_button_style),
             "Zurück zur Hauptansicht".to_string(),
         );
 
