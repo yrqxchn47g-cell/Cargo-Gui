@@ -2,7 +2,7 @@
 //!
 //! ## Layout
 //! The main view consists of:
-//! - A topbar with a menu/hamburger icon and the app title.
+//! - A topbar with the app title.
 //! - A project directory row with path input + "Durchsuchen" (folder picker via rfd)
 //!   and "Als Start" (set working directory) buttons.
 //! - An arguments row with a label and text input.
@@ -2254,7 +2254,6 @@ impl App {
             let status_text = text(self.output_find_status.as_str()).size(12);
             let panel = container(
                 row![
-                    bi(Bootstrap::Search).size(12),
                     find_input,
                     prev_btn,
                     next_btn,
