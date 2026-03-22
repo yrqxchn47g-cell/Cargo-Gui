@@ -2235,22 +2235,31 @@ impl App {
                 .on_submit(Msg::OutputFindNext)
                 .padding([4, 6])
                 .width(180);
-            let next_btn = button("▼")
-                .on_press(Msg::OutputFindNext)
-                .padding([4, 8])
-                .style(readable_button_style);
-            let prev_btn = button("▲")
-                .on_press(Msg::OutputFindPrev)
-                .padding([4, 8])
-                .style(readable_button_style);
-            let close_btn = button("✕")
-                .on_press(Msg::ToggleOutputFind)
-                .padding([4, 6])
-                .style(button::danger);
+            let next_btn = hover_tip(
+                button(bi(Bootstrap::ChevronDown).size(11))
+                    .on_press(Msg::OutputFindNext)
+                    .padding([4, 8])
+                    .style(readable_button_style),
+                "Zum nächsten Treffer springen (Enter)".to_string(),
+            );
+            let prev_btn = hover_tip(
+                button(bi(Bootstrap::ChevronUp).size(11))
+                    .on_press(Msg::OutputFindPrev)
+                    .padding([4, 8])
+                    .style(readable_button_style),
+                "Zum vorherigen Treffer springen (Shift+Enter)".to_string(),
+            );
+            let close_btn = hover_tip(
+                button(bi(Bootstrap::X).size(11))
+                    .on_press(Msg::ToggleOutputFind)
+                    .padding([4, 6])
+                    .style(button::danger),
+                "Suchleiste schließen (Esc)".to_string(),
+            );
             let status_text = text(self.output_find_status.as_str()).size(12);
             let panel = container(
                 row![
-                    text("Suchen:").size(12),
+                    bi(Bootstrap::Search).size(12),
                     find_input,
                     prev_btn,
                     next_btn,
@@ -2570,22 +2579,26 @@ impl App {
                 "Suchtext eingeben (Enter = Nächstes, Shift+Enter = Vorheriges)".to_string(),
             );
             let next_btn = hover_tip(
-                button("▼")
+                button(bi(Bootstrap::ChevronDown).size(11))
                     .on_press(Msg::FindNext)
                     .padding([4, 8])
                     .style(readable_button_style),
                 "Zum nächsten Treffer springen (Enter)".to_string(),
             );
             let prev_btn = hover_tip(
-                button("▲")
+                button(bi(Bootstrap::ChevronUp).size(11))
                     .on_press(Msg::FindPrev)
                     .padding([4, 8])
                     .style(readable_button_style),
                 "Zum vorherigen Treffer springen (Shift+Enter)".to_string(),
             );
-            let toggle_replace_label = if self.find_show_replace { "▲ Ersetzen" } else { "▼ Ersetzen" };
+            let toggle_replace_icon = if self.find_show_replace {
+                bi(Bootstrap::ChevronUp).size(11)
+            } else {
+                bi(Bootstrap::ChevronDown).size(11)
+            };
             let toggle_replace_btn = hover_tip(
-                button(toggle_replace_label)
+                button(row![toggle_replace_icon, text(" Ersetzen").size(12)])
                     .on_press(Msg::ToggleReplaceField)
                     .padding([4, 8])
                     .style(readable_button_style),
@@ -2642,7 +2655,7 @@ impl App {
                     "Alle Vorkommen im aktiven Tab auf einmal ersetzen".to_string(),
                 );
                 let replace_row = row![
-                    text("↺").size(12),
+                    bi(Bootstrap::ArrowRepeat).size(12),
                     replace_input,
                     replace_btn,
                     replace_all_btn,
