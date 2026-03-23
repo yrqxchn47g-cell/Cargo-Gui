@@ -124,8 +124,12 @@ const MIN_WINDOW_HEIGHT: f32 = 600.0;
 /// Ghost image shown in the About dialog.
 const GHOST_GIF: &[u8] = include_bytes!("../assets/Ghost.gif");
 
-/// Filename of the help PDF distributed alongside the application.
-const HELP_PDF_FILENAME: &str = "cargo-gui-bedienungsanleitung.pdf";
+/// Embedded PNG pages of the Bedienungsanleitung (rendered at 150 dpi).
+const MANUAL_PAGES: &[&[u8]] = &[
+    include_bytes!("../assets/manual/bedienung-1.png"),
+    include_bytes!("../assets/manual/bedienung-2.png"),
+    include_bytes!("../assets/manual/bedienung-3.png"),
+];
 
 /// Visible width (px) of the "Argumente" text-input field (≈ 16 characters).
 const ARGS_INPUT_WIDTH: u16 = 128;
@@ -168,6 +172,8 @@ enum View {
     Editor,
     Help,
     About,
+    /// Inline PDF-manual viewer (shows pre-rendered PNG pages).
+    PdfManual,
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +442,10 @@ struct App {
     pending_diag_level: Option<(DiagnosticLevel, String, Option<String>)>,
     /// Highlight colour to use for the diagnostic line in the editor.
     diag_highlight_color: Color,
+
+    // --- PDF manual viewer ---
+    /// Currently displayed page index (0-based) in the PDF manual viewer.
+    manual_page: usize,
 }
 
 impl App {
@@ -501,6 +511,7 @@ impl App {
                 diagnostics: Vec::new(),
                 pending_diag_level: None,
                 diag_highlight_color: DIAG_ERROR_COLOR,
+                manual_page: 0,
             },
             startup_task,
         )
@@ -655,6 +666,11 @@ enum Msg {
 
     /// Open the help PDF with the system default viewer.
     OpenHelpPdf,
+
+    /// Navigate to the next page in the built-in PDF manual viewer.
+    ManualNextPage,
+    /// Navigate to the previous page in the built-in PDF manual viewer.
+    ManualPrevPage,
 
     /// Open the Public Domain license information in the default browser.
     OpenPublicDomainLink,
@@ -1574,32 +1590,21 @@ impl App {
             }
 
             Msg::OpenHelpPdf => {
-                // Find PDF next to the executable or in the current directory.
-                let pdf_path = std::env::current_exe()
-                    .ok()
-                    .and_then(|exe| {
-                        let candidate = exe.parent()?.join(HELP_PDF_FILENAME);
-                        if candidate.exists() { Some(candidate) } else { None }
-                    })
-                    .unwrap_or_else(|| std::path::PathBuf::from(HELP_PDF_FILENAME));
+                self.manual_page = 0;
+                self.current_view = View::PdfManual;
+                Task::none()
+            }
 
-                let open_result = {
-                    #[cfg(target_os = "linux")]
-                    { std::process::Command::new("xdg-open").arg(&pdf_path).spawn() }
-                    #[cfg(target_os = "macos")]
-                    { std::process::Command::new("open").arg(&pdf_path).spawn() }
-                    #[cfg(target_os = "windows")]
-                    {
-                        std::process::Command::new("cmd")
-                            .args(["/c", "start", "", pdf_path.display().to_string().as_str()])
-                            .spawn()
-                    }
-                    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-                    { Err(std::io::Error::other("unsupported platform")) }
-                };
+            Msg::ManualNextPage => {
+                if self.manual_page + 1 < MANUAL_PAGES.len() {
+                    self.manual_page += 1;
+                }
+                Task::none()
+            }
 
-                if let Err(e) = open_result {
-                    self.status = format!("PDF konnte nicht geöffnet werden: {e}");
+            Msg::ManualPrevPage => {
+                if self.manual_page > 0 {
+                    self.manual_page -= 1;
                 }
                 Task::none()
             }
@@ -1742,6 +1747,7 @@ impl App {
             View::Editor => self.view_editor(),
             View::Help => self.view_help(),
             View::About => self.view_about(),
+            View::PdfManual => self.view_manual(),
         };
 
         let topbar = self.view_topbar();
@@ -2868,14 +2874,14 @@ impl App {
 
         let pdf_btn = hover_tip(
             button(
-                row![bi(Bootstrap::FileEarmarkPdf).size(fs), text(" PDF öffnen").size(fs)]
+                row![bi(Bootstrap::FileEarmarkPdf).size(fs), text(" Anleitung anzeigen").size(fs)]
                     .spacing(4)
                     .align_y(iced::Alignment::Center),
             )
             .on_press(Msg::OpenHelpPdf)
             .padding([5, 10])
             .style(readable_button_style),
-            "Bedienungsanleitung als PDF-Dokument öffnen".to_string(),
+            "Bedienungsanleitung im integrierten PDF-Betrachter öffnen".to_string(),
         );
 
         let help_text = text(HELP_TEXT).size(13);
@@ -2890,6 +2896,69 @@ impl App {
         .padding(16)
         .height(Length::Fill)
         .into()
+    }
+
+    // -----------------------------------------------------------------------
+    // PDF manual viewer
+    // -----------------------------------------------------------------------
+
+    fn view_manual(&self) -> Element<'_, Msg> {
+        let fs = self.config.button_font_size;
+        let total = MANUAL_PAGES.len();
+        let page = self.manual_page;
+
+        let back_btn = hover_tip(
+            button(
+                row![bi(Bootstrap::ArrowLeft).size(fs), text(" Zurück").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::NavigateTo(View::Help))
+            .padding([5, 10])
+            .style(readable_button_style),
+            "Zurück zur Hilfe-Ansicht".to_string(),
+        );
+
+        let prev_btn = button(
+            row![bi(Bootstrap::ChevronLeft).size(fs), text(" Zurück").size(fs)]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+        )
+        .on_press_maybe(if page > 0 { Some(Msg::ManualPrevPage) } else { None })
+        .padding([5, 10])
+        .style(readable_button_style);
+
+        let next_btn = button(
+            row![text("Weiter ").size(fs), bi(Bootstrap::ChevronRight).size(fs)]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+        )
+        .on_press_maybe(if page + 1 < total { Some(Msg::ManualNextPage) } else { None })
+        .padding([5, 10])
+        .style(readable_button_style);
+
+        let page_label = text(format!("Seite {} / {}", page + 1, total)).size(fs);
+
+        let nav_row = row![
+            back_btn,
+            horizontal_space(),
+            prev_btn,
+            page_label,
+            next_btn,
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+
+        let handle = img_widget::Handle::from_bytes(
+            MANUAL_PAGES.get(page).copied().unwrap_or(MANUAL_PAGES[0]),
+        );
+        let page_img = img_widget(handle).width(Length::Fill);
+
+        column![nav_row, scrollable(page_img).height(Length::Fill)]
+            .spacing(8)
+            .padding(16)
+            .height(Length::Fill)
+            .into()
     }
 
     // -----------------------------------------------------------------------
