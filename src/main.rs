@@ -554,6 +554,8 @@ enum Msg {
     Clear,
     /// Copy the entire output content to the clipboard.
     CopyOutput,
+    /// Copy the active editor tab's content to the clipboard.
+    CopyEditorContent,
     /// Periodic flush: rebuild `text_editor::Content` from the ring buffer if dirty.
     FlushOutput,
     /// Pass-through for the output text-editor.
@@ -856,6 +858,19 @@ impl App {
 
             Msg::CopyOutput => {
                 let text = self.output_content.text();
+                if text.is_empty() {
+                    Task::none()
+                } else {
+                    clipboard::write(text)
+                }
+            }
+
+            Msg::CopyEditorContent => {
+                let text = self
+                    .editor_tabs
+                    .get(self.active_tab)
+                    .map(|tab| tab.content.text())
+                    .unwrap_or_default();
                 if text.is_empty() {
                     Task::none()
                 } else {
@@ -2518,6 +2533,18 @@ impl App {
             "Aktiven Tab speichern — bei Untitled wird ein Speichern-Dialog geöffnet".to_string(),
         );
 
+        let copy_editor_btn = hover_tip(
+            button(
+                row![bi(Bootstrap::ClipboardFill).size(fs), text(" Kopieren").size(fs)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Msg::CopyEditorContent)
+            .padding([5, 10])
+            .style(readable_button_style),
+            "Inhalt des aktiven Tabs in die Zwischenablage kopieren".to_string(),
+        );
+
         let find_btn = hover_tip(
             button(
                 row![
@@ -2782,6 +2809,7 @@ impl App {
                 new_tab_btn,
                 open_btn,
                 save_btn,
+                copy_editor_btn,
                 find_btn,
             ]
             .spacing(10)
