@@ -2725,13 +2725,23 @@ impl App {
                 // Persistent per-tab diagnostic highlights (all error/warning/note
                 // lines remain visible until the tab is closed).
                 let diag_highlight = make_persistent_error_highlight_layer(&tab.editor_errors);
+                // Übernimmt die per Button gewählte Highlight-Farbe auch für die
+                // normale Textauswahl im Editor, sodass Suchmarkierung und
+                // Selektion visuell konsistent sind.
+                let selection_color = self.find_test_color;
                 let te = text_editor(&tab.content)
                     .on_action(Msg::EditorAction)
                     .height(Length::Shrink)
                     // Force an absolute line height that matches LINE_HEIGHT exactly
                     // so that highlight bands are always pixel-perfectly aligned,
                     // regardless of font size or theme.
-                    .line_height(Pixels(LINE_HEIGHT));
+                    .line_height(Pixels(LINE_HEIGHT))
+                    .style(move |theme, status| {
+                        let mut style = iced::widget::text_editor::default(theme, status);
+                        // Textauswahl-Farbe an die gewählte Highlight-Farbe anpassen.
+                        style.selection = selection_color;
+                        style
+                    });
                 let editor_stack: Element<'_, Msg> = stack![te, diag_highlight, highlight].into();
                 mouse_area(
                     scrollable(row![gutter, editor_stack])
@@ -3266,6 +3276,17 @@ fn readable_button_style(
             text_color: base.text_color.scale_alpha(0.7),
             ..base
         },
+        // Hinweis: iced 0.13 stellt keinen separaten Status::Focused für Buttons bereit.
+        // Sobald iced einen Focused-Zustand unterstützt, sollte hier ein gelber Rahmen
+        // ergänzt werden:
+        //   Status::Focused => iced::widget::button::Style {
+        //       border: iced::Border {
+        //           width: 2.0,
+        //           color: Color::from_rgb(1.0, 0.8, 0.0), // Fokusrand (gelb)
+        //           ..base.border
+        //       },
+        //       ..base
+        //   },
     }
 }
 
