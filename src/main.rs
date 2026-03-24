@@ -47,7 +47,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use config::{AppTheme, Config};
+use config::{AppTheme, Config, HighlightColor};
 use futures::channel::mpsc;
 use futures::FutureExt as _;
 use futures::SinkExt as _;
@@ -159,6 +159,37 @@ const COMMANDS_RIGHT: &[(&str, &str, &str)] = &[
     ("Doc", "doc", "cargo doc — API-Dokumentation für das Projekt generieren"),
     ("Bench", "bench", "cargo bench — Benchmarks ausführen"),
 ];
+
+// ---------------------------------------------------------------------------
+// Helper: HighlightColor → iced Color
+// ---------------------------------------------------------------------------
+
+/// Konvertiert eine [`HighlightColor`]-Variante in die zugehörige iced-Farbe,
+/// die als Such-Highlight-Band im Editor verwendet wird.
+///
+/// Wird beim Start der Anwendung genutzt, um die gespeicherte Farbe aus der
+/// Config wiederherzustellen, und beim Speichern, um den Rückweg zu gehen.
+fn highlight_color_to_iced(hc: &HighlightColor) -> Color {
+    match hc {
+        HighlightColor::Yellow => FIND_CURRENT_COLOR,
+        HighlightColor::Green  => FIND_TEST_GREEN_COLOR,
+        HighlightColor::Red    => FIND_TEST_RED_COLOR,
+    }
+}
+
+/// Ordnet eine iced-[`Color`] der passenden [`HighlightColor`]-Variante zu.
+///
+/// Da die Farben exakte Konstanten sind, ist ein direkter Vergleich zuverlässig.
+/// Unbekannte Farben werden auf [`HighlightColor::Yellow`] (Standard) abgebildet.
+fn iced_color_to_highlight(c: Color) -> HighlightColor {
+    if c == FIND_TEST_GREEN_COLOR {
+        HighlightColor::Green
+    } else if c == FIND_TEST_RED_COLOR {
+        HighlightColor::Red
+    } else {
+        HighlightColor::Yellow
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Views
@@ -454,6 +485,8 @@ impl App {
         let project_path = config.default_path.clone();
         let window_width = config.window_width.max(MIN_WINDOW_WIDTH);
         let window_height = config.window_height.max(MIN_WINDOW_HEIGHT);
+        // Gespeicherte Highlight-Farbe beim Start wiederherstellen.
+        let initial_highlight_color = highlight_color_to_iced(&config.highlight_color);
         let editor_tabs = vec![EditorTab::new_untitled(0)];
         let startup_task: Task<Msg> = if config.is_fullscreen {
             iced::window::get_latest().then(|maybe_id| {
@@ -497,7 +530,7 @@ impl App {
                 find_all_match_lines: Vec::new(),
                 context_menu: None,
                 editor_highlight_line: None,
-                find_test_color: FIND_TEST_RED_COLOR,
+                find_test_color: initial_highlight_color,
                 output_find_open: false,
                 output_find_text: String::new(),
                 output_find_status: String::new(),
@@ -1630,6 +1663,10 @@ impl App {
             // --- Find highlight color ---
             Msg::SetFindTestColor(c) => {
                 self.find_test_color = c;
+                // Auswahl in der Config persistieren, damit sie beim nächsten
+                // Start automatisch wiederhergestellt wird.
+                self.config.highlight_color = iced_color_to_highlight(c);
+                self.config.save();
                 Task::none()
             }
 
@@ -2760,11 +2797,18 @@ impl App {
                 text("Kein Tab ausgewählt").into()
             };
 
+        // Aktiven Highlight-Button hervorheben: der ausgewählte Button erhält den
+        // primären Stil (primary), alle anderen den sekundären Stil (secondary).
+        let active_highlight = self.find_test_color;
         let color_btn = |label: &str, color: Color| {
             button(text(label.to_string()).size(11))
                 .on_press(Msg::SetFindTestColor(color))
                 .padding([2, 6])
-                .style(readable_button_style)
+                .style(if color == active_highlight {
+                    button::primary
+                } else {
+                    button::secondary
+                })
         };
         let color_row = row![
             text("Highlight-Farbe:").size(11),

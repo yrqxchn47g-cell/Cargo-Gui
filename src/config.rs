@@ -151,6 +151,44 @@ impl std::fmt::Display for AppTheme {
 }
 
 // ---------------------------------------------------------------------------
+// HighlightColor
+// ---------------------------------------------------------------------------
+
+/// The three highlight-colour variants offered in the editor toolbar.
+///
+/// The selected variant is persisted in the config file so the application
+/// restores the user's choice on the next start.
+///
+/// | Variant  | Display label | Usage                                 |
+/// |----------|---------------|---------------------------------------|
+/// | `Yellow` | Gelb          | Default – warm, easy on the eyes      |
+/// | `Green`  | Grün          | Alternative colour option             |
+/// | `Red`    | Rot           | High-contrast accent                  |
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HighlightColor {
+    /// Gelb – the application default.
+    Yellow,
+    /// Grün.
+    Green,
+    /// Rot.
+    Red,
+}
+
+impl Default for HighlightColor {
+    /// Returns [`HighlightColor::Yellow`] as the application default.
+    fn default() -> Self {
+        Self::Yellow
+    }
+}
+
+/// Returns [`HighlightColor::Yellow`] – used as the `serde` default for the
+/// config field so that existing config files without the key still start with
+/// the yellow highlight colour selected.
+fn default_highlight_color() -> HighlightColor {
+    HighlightColor::Yellow
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
@@ -199,6 +237,13 @@ pub struct Config {
     /// Whether the window was in fullscreen mode when the application was last closed.
     #[serde(default = "default_is_fullscreen")]
     pub is_fullscreen: bool,
+    /// Zuletzt gewählte Highlight-Farbe im Editor-Tab.
+    ///
+    /// Wird beim Starten der Anwendung wiederhergestellt. Wenn der Wert in der
+    /// Config-Datei fehlt (ältere Installation), wird [`HighlightColor::Yellow`]
+    /// als Standard verwendet.
+    #[serde(default = "default_highlight_color")]
+    pub highlight_color: HighlightColor,
 }
 
 impl Default for Config {
@@ -210,6 +255,7 @@ impl Default for Config {
             window_width: default_window_width(),
             window_height: default_window_height(),
             is_fullscreen: default_is_fullscreen(),
+            highlight_color: default_highlight_color(),
         }
     }
 }
