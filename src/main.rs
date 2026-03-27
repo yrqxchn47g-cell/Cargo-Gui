@@ -615,8 +615,10 @@ enum Msg {
     TabClose(usize),
     /// Open a native file-picker dialog to load a file into the editor.
     OpenFile,
-    /// File chosen via rfd; `None` means the dialog was cancelled.
-    FilePicked(Option<(PathBuf, String)>),
+    /// File chosen via rfd; `None` means the dialog was cancelled,
+    /// `Some(Ok((path, text)))` = file read successfully,
+    /// `Some(Err(msg))` = I/O or dialog error.
+    FilePicked(Option<Result<(PathBuf, String), String>>),
     /// Save the active tab (direct write if path known, otherwise open save dialog).
     SaveFile,
     /// Native save completed.
@@ -1048,27 +1050,55 @@ impl App {
 
             Msg::OpenFile => Task::perform(
                 async {
-                    let handle = rfd::AsyncFileDialog::new().pick_file().await?;
+                    // Catch panics from rfd (e.g. missing display/portal on Linux)
+                    // so that a missing or broken file-picker dialog never crashes
+                    // the whole application.
+                    let dialog_result = std::panic::AssertUnwindSafe(
+                        rfd::AsyncFileDialog::new().pick_file(),
+                    )
+                    .catch_unwind()
+                    .await;
+
+                    let handle = match dialog_result {
+                        Ok(Some(h)) => h,
+                        Ok(None) => return None, // Dialog cancelled by user.
+                        Err(_) => {
+                            return Some(Err(
+                                "Dateiauswahl-Dialog konnte nicht geöffnet werden".to_string(),
+                            ))
+                        }
+                    };
+
                     let path = handle.path().to_path_buf();
-                    let contents = tokio::fs::read_to_string(&path).await.ok()?;
-                    Some((path, contents))
+                    match tokio::fs::read_to_string(&path).await {
+                        Ok(contents) => Some(Ok((path, contents))),
+                        Err(e) => Some(Err(format!(
+                            "Datei konnte nicht gelesen werden: {e}"
+                        ))),
+                    }
                 },
                 Msg::FilePicked,
             ),
 
             Msg::FilePicked(maybe) => {
-                if let Some((path, file_text)) = maybe {
-                    // Switch to existing tab if the file is already open.
-                    if let Some(idx) = self
-                        .editor_tabs
-                        .iter()
-                        .position(|t| t.path.as_deref() == Some(&path))
-                    {
-                        self.active_tab = idx;
-                    } else {
-                        self.editor_tabs
-                            .push(EditorTab::from_file(path, &file_text));
-                        self.active_tab = self.editor_tabs.len() - 1;
+                match maybe {
+                    None => {} // Dialog was cancelled — nothing to do.
+                    Some(Ok((path, file_text))) => {
+                        // Switch to existing tab if the file is already open.
+                        if let Some(idx) = self
+                            .editor_tabs
+                            .iter()
+                            .position(|t| t.path.as_deref() == Some(&path))
+                        {
+                            self.active_tab = idx;
+                        } else {
+                            self.editor_tabs
+                                .push(EditorTab::from_file(path, &file_text));
+                            self.active_tab = self.editor_tabs.len() - 1;
+                        }
+                    }
+                    Some(Err(msg)) => {
+                        self.status = format!("Fehler beim Öffnen: {msg}");
                     }
                 }
                 Task::none()
