@@ -1,0 +1,8 @@
+{
+  "typ": "Rust",
+  "typ_override": "Rust",
+  "zweck": "Programmier-/Entwicklungsumgebung für Rust als native GUI (iced).",
+  "input": "Rust-Projekte/Code.",
+  "notiz": "Native Rust-GUI (iced 0.13). Binary 'cargo-gui'. Build: cargo build --release.",
+  "ausschluss": [".git", "target", "node_modules", "clippy-report"]
+}
